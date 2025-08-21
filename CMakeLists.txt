@@ -9,5 +9,6 @@ file(GLOB_RECURSE SOURCE_FILES "src/*.c")
 add_executable(object-tracker ${SOURCE_FILES})
 
 target_include_directories(object-tracker
-        PUBLIC include
+        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include
 )
+target_link_libraries(object-tracker m)
