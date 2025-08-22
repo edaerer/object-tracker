@@ -14048,7 +14048,7 @@ void sod_img_set_release(sod_img *aLoaded, int nEntries) {
 }
 #ifndef SOD_DISABLE_IMG_WRITER
 #define STB_IMAGE_WRITE_IMPLEMENTATION
-#include"sod_img_writer.h"
+#include "sod_img_writer.h"
 /*
 * CAPIREF: Refer to the official documentation at https://sod.pixlab.io/api.html for the expected parameters this interface takes.
 */

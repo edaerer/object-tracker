@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sod.h>
+#include <../libs/sod/sod.h>
 #include <image_reader.h>
 
 int main(void) {
