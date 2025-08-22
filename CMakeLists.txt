@@ -5,12 +5,17 @@ set(CMAKE_C_STANDARD 23)
 set(CMAKE_EXE_LINKER_FLAGS "-static")
 
 file(GLOB_RECURSE SOURCE_FILES "src/*.c")
+file(GLOB_RECURSE LIBS_SOD_FILES "libs/sod/*.c")
 
 add_executable(object-tracker ${SOURCE_FILES})
+add_library(sod ${LIBS_SOD_FILES})
 
-target_link_libraries(object-tracker m)
-
+target_link_libraries(object-tracker
+        sod m
+)
 target_compile_definitions(object-tracker
-        PUBLIC WEBCAM_READER)
+        PUBLIC WEBCAM_READER
+)
 target_include_directories(object-tracker
-        PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+        PUBLIC include
+)
