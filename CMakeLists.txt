@@ -4,10 +4,10 @@ project(object-tracker VERSION 0.0.1 LANGUAGES C)
 set(CMAKE_C_STANDARD 23)
 set(CMAKE_EXE_LINKER_FLAGS "-static")
 
-file(GLOB_RECURSE SOURCE_FILES "src/*.c")
+file(GLOB_RECURSE SRC_FILES "src/*.c")
 file(GLOB_RECURSE LIBS_SOD_FILES "libs/sod/*.c")
 
-add_executable(object-tracker ${SOURCE_FILES})
+add_executable(object-tracker ${SRC_FILES})
 add_library(sod ${LIBS_SOD_FILES})
 
 target_link_libraries(object-tracker
@@ -18,4 +18,5 @@ target_compile_definitions(object-tracker
 )
 target_include_directories(object-tracker
         PUBLIC include
+        PUBLIC libs/sod
 )
