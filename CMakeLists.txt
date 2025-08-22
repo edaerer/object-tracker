@@ -11,6 +11,6 @@ add_executable(object-tracker ${SOURCE_FILES})
 target_link_libraries(object-tracker m)
 
 target_compile_definitions(object-tracker
-        PUBLIC WEBCAM_LOADER)
+        PUBLIC WEBCAM_READER)
 target_include_directories(object-tracker
         PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)

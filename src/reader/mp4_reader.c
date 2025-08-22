@@ -1,4 +1,4 @@
-#ifdef WEBCAM_LOADER
+#ifdef MP4_READER
 
 #include <fcntl.h>
 #include <frame_utils.h>
@@ -75,4 +75,4 @@ imgdat_s load_data() {
     return data;
 }
 
-#endif // WEBCAM_LOADER
+#endif // MP4_READER
