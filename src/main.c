@@ -1,7 +1,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sod.h>
 #include <image_reader.h>
 
 int main(void) {
@@ -10,13 +9,9 @@ int main(void) {
     while (1) {
         imgdat_s data = load_data();
 
-        sod_img img = {
-            .w = data.w,
-            .h = data.h,
-            .c = data.c,
-            .data = data.start
-        };
-        sod_img_save_as_png(img, "frame.png");
+        printf("Size: %d\n", data.length);
+        printf("Width: %d\n", data.w);
+        printf("Height: %d\n", data.h);
 
         free_imgdat(data);
     }
