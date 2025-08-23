@@ -1,4 +1,3 @@
-#define WEBCAM_READER
 #ifdef WEBCAM_READER
 
 #include <fcntl.h>
