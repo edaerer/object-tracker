@@ -1,6 +1,7 @@
 #ifndef FRAME_UTILS_H
 #define FRAME_UTILS_H
 
+#include <stdio.h>
 #include <stdlib.h>
 
 double clamp(const double v) {

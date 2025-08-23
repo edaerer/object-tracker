@@ -6,15 +6,13 @@
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sys/poll.h>
 #include <image_reader.h>
 
-#define WIDTH   1280
-#define HEIGHT  720
+#define WIDTH   640
+#define HEIGHT  480
 
 static int fd;
 static void *ptr;
-static struct pollfd pfd = {0};
 static struct v4l2_format fmt = {0};
 static struct v4l2_buffer buf = {0};
 static struct v4l2_buffer qbuf = {0};
@@ -25,7 +23,7 @@ void init_reader(const char *path) {
 
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     fmt.fmt.pix.width = WIDTH;
-    fmt.fmt.pix.height = WIDTH;
+    fmt.fmt.pix.height = HEIGHT;
     fmt.fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV;
     fmt.fmt.pix.field = V4L2_FIELD_NONE;
     ioctl(fd, VIDIOC_S_FMT, &fmt);
@@ -47,10 +45,9 @@ void init_reader(const char *path) {
     qbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     qbuf.memory = V4L2_MEMORY_MMAP;
     ioctl(fd, VIDIOC_QBUF, &qbuf);
-    ioctl(fd, VIDIOC_STREAMON, &req.type);
 
-    pfd.fd = fd;
-    pfd.events = POLLIN;
+    enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    ioctl(fd, VIDIOC_STREAMON, &type);
 }
 
 void close_reader(const char *path) {
@@ -60,8 +57,12 @@ void close_reader(const char *path) {
 }
 
 imgdat_s load_data() {
-    poll(&pfd, 1, 2000);
-    ioctl(fd, VIDIOC_DQBUF, &buf);
+    struct v4l2_buffer dqbuf = {0};
+    dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
+    dqbuf.memory = V4L2_MEMORY_MMAP;
+
+
+    ioctl(fd, VIDIOC_DQBUF, &dqbuf);
 
     const imgdat_s data = {
         .w = WIDTH,
@@ -71,7 +72,7 @@ imgdat_s load_data() {
         .length = WIDTH * HEIGHT * 3 * sizeof(float),
     };
 
-    ioctl(fd, VIDIOC_QBUF, &buf);
+    ioctl(fd, VIDIOC_QBUF, &dqbuf);
     return data;
 }
 
