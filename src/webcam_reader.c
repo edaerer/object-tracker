@@ -6,6 +6,7 @@
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
+#include <sod.h>
 #include <image_reader.h>
 
 #define WIDTH   640
