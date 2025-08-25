@@ -58,8 +58,8 @@
 
 # CMake
 cmake-build-*/
-build/
 .vscode/
+build/
 
 # File-based project format
 *.iws

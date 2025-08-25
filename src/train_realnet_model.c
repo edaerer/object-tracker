@@ -6,7 +6,7 @@
 static void my_log_consumer(const char *zMsg, size_t n, void *pUser);
 
 int main(void) {
-    const char *zTrainFile = "../train_data/train.txt";
+    const char *zTrainFile = "../train_data/train.ini";
     sod_realnet_trainer *pNet;
 
     int rc;

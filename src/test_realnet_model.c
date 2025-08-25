@@ -5,7 +5,7 @@
 #include <sod.h>
 
 int main(void) {
-    const char *zFile = "../images/test.png";
+    const char *zFile = "../images/test4.jpg";
 
     sod_realnet *pNet;
     int i, rc;
@@ -86,7 +86,7 @@ int main(void) {
                aBoxes[i].score, aBoxes[i].zName ? aBoxes[i].zName : "bilinmeyen");
 
         /* Eşik değeri 0.0 - tüm tespitleri kabul et */
-        if (aBoxes[i].score >= 7.0) {
+        if (aBoxes[i].score >= 5.0) {
             detected_cups++;
             /* Draw a blue box around detected object */
             sod_image_draw_bbox_width(color, aBoxes[i], 3, 0., 150., 255.); // Mavi renk
