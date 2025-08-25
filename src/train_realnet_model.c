@@ -1,14 +1,7 @@
-/**
- * sod realnet modellerini CPU üzerinde eğitir
- * modeller CNN tabanlı
- * gcc -D SOD_ENABLE_NET_TRAIN sod.c main.c -lm
- **/
+#ifdef TRAIN_REALNET_MODEL
+
 #include <stdio.h>
-#ifndef SOD_ENABLE_NET_TRAIN
-#define SOD_ENABLE_NET_TRAIN // bu satır sod_realnet_trainer değişkeni için gerekli!!
-#endif
-#define SOD_IMPLEMENTATION
-#include "../libs/sod/sod.h"
+#include <sod.h>
 
 static void my_log_consumer(const char *zMsg, size_t n, void *pUser);
 
@@ -38,3 +31,5 @@ static void my_log_consumer(const char *zMsg, size_t n, void *pUser){
     fwrite(zMsg, 1, n, stdout);
     fputc('\n', stdout);
 }
+
+#endif

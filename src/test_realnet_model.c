@@ -2,22 +2,18 @@
 
 #include <stdio.h>
 #include <stdlib.h>
-#include "sod.h"
+#include <sod.h>
 
 int main(void) {
-    const char *zFile = "./images/test4.jpg";
-    /*
-     * By default, RealNets are designed to process video streams thanks
-     * to their very fast processing speed. However, for the sake of simplicity
-     * we'll stick with images for this programming intro to RealNets.
-     */
+    const char *zFile = "../images/test4.jpg";
+
     sod_realnet *pNet;
     int i, rc;
     rc = sod_realnet_create(&pNet);
     if (rc != SOD_OK) return rc;
 
     /* ==== MODELİ BELLEĞE YÜKLE ==== */
-    FILE *fp = fopen("./models/bardak_detector.realnet", "rb");
+    FILE *fp = fopen("../models/bardak_detector.realnet", "rb");
     if (!fp) {
         puts("Bardak tespit modeli açılamadı");
         return -1;

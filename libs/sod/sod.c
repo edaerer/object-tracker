@@ -2014,11 +2014,12 @@ static float rand_normal() {
 
 static float rand_uniform(float min, float max) {
     if (max < min) {
-        float swap = min;
+        float tmp = min;
         min = max;
-        max = swap;
+        max = tmp;
     }
-    return ((float) rand() / RAND_MAX * (max - min)) + min;
+    float r = (float)rand() / (float)RAND_MAX;
+    return r * (max - min) + min;
 }
 
 static int constrain_int(int a, int min, int max) {
@@ -12745,7 +12746,7 @@ static int DetectorLearnNewStage(sod_realnet_detector *pDet, float mintpr, float
 #define SOD_MAX_RECURSE_COUNT 3
 #endif /* SOD_MAX_RECURSE_COUNT */
 static float aug_rand(float M, float N) {
-    return M + (rand() / (RAND_MAX / (N - M)));
+    return M + (rand() / ((float) RAND_MAX / (N - M)));
 }
 /*
 * Collect image samples from a given path.

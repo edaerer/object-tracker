@@ -1,19 +1,17 @@
-# RealNet bardak dedektör eğitim konfigürasyonu
 [paths]
-pos = /home/edaerer/Documents/CODE/C/object-tracker/train_data/positives
-neg = /home/edaerer/Documents/CODE/C/object-tracker/train_data/negatives/random_objects
+pos = /home/hakan/Desktop/hakan/dev/C/object-tracker/train_data/positives
+neg = /home/hakan/Desktop/hakan/dev/C/object-tracker/train_data/negatives
 recurse = true
 
 [detector]
-# Eğitim parametreleri - bardak tespiti için optimize edilmiş
 min_tree_depth = 6          # Daha derin ağaçlar, daha karmaşık özellikler
 max_tree_depth = 10         # Maksimum derinlik
 max_trees = 256             # Ağaç sayısı (2048 çok fazla olabilir)
 tpr = 0.95                  # True Positive Rate (doğru pozitif oranı)
 fpr = 0.15                  # False Positive Rate (yanlış pozitif oranı)
-data_augment = True         # Veri artırma (döndürme, ölçekleme)
+data_augment = true         # Veri artırma (döndürme, ölçekleme)
 target_fpr = 0.01           # Hedef yanlış pozitif oranı
-normalize = True            # Görüntü normalizasyonu
+normalize = true            # Görüntü normalizasyonu
 
 # Model bilgileri
 name = bardak_detector_v1
