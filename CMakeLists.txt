@@ -23,7 +23,7 @@ target_compile_definitions(sod
 )
 target_compile_definitions(object-tracker
         PUBLIC WEBCAM_READER
-        PUBLIC TEST_REALNET_MODEL
+        PUBLIC TRAIN_REALNET_MODEL
 )
 target_include_directories(object-tracker
         PUBLIC ${CMAKE_SOURCE_DIR}/include
