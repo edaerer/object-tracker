@@ -1,8 +1,0 @@
-{
-    "cmake.configureOnOpen": false,
-    "cmake.configureOnEdit": false,
-    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
-    "files.associations": {
-        "stdio.h": "c"
-    }
-}
