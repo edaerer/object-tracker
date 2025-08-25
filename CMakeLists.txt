@@ -15,6 +15,7 @@ target_link_libraries(object-tracker
 )
 target_compile_definitions(object-tracker
         PUBLIC WEBCAM_READER
+        PUBLIC TEST_REALNET_MODEL
 )
 target_include_directories(object-tracker
         PUBLIC include
