@@ -333,7 +333,7 @@ typedef struct {
     box   bbox;
 } sorted_detection;
 
-int main(void) {
+int main(int argc, char* argv[]) {
     // ---- YOLO/algoritma eşikleri ----
     const float thresh = 0.1f;   // önceki kodundaki gibi çok düşük eşik
     const float hier   = 0.5f;
@@ -342,8 +342,9 @@ int main(void) {
 
     // ---- Ağı yükle ----
     // Not: cfg/weights eşleşmeli. tiny kullanıyorsan ikisini de tiny seç.
-    const char* cfg     = "../config/yolov3-tiny.cfg";
-    const char* weights = "../weights/yolov3-tiny.weights";
+    printf("%d\n", argc);
+    const char* cfg     = argc >= 2 ? argv[1] : "../config/yolov3-tiny.cfg";
+    const char* weights = argc >= 3 ? argv[2] : "../weights/yolov3-tiny.weights";
 
     network *net = load_network((char*)cfg, (char*)weights, 0);
     if (!net) {
