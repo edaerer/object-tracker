@@ -342,8 +342,8 @@ int main(void) {
 
     // ---- Ağı yükle ----
     // Not: cfg/weights eşleşmeli. tiny kullanıyorsan ikisini de tiny seç.
-    const char* cfg     = "../config/yolov3.cfg";
-    const char* weights = "../weights/yolov3.weights";
+    const char* cfg     = "../config/yolov3-tiny.cfg";
+    const char* weights = "../weights/yolov3-tiny.weights";
 
     network *net = load_network((char*)cfg, (char*)weights, 0);
     if (!net) {
