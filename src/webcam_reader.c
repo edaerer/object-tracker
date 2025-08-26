@@ -1,13 +1,12 @@
 #ifdef WEBCAM_READER
 
 #include <fcntl.h>
-#include <frame_utils.h>
 #include <unistd.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <sod.h>
-#include <image_reader.h>
+#include <tracker/frame_utils.h>
+#include <tracker/image_reader.h>
 
 #define WIDTH   640
 #define HEIGHT  480

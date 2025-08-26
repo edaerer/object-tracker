@@ -60,7 +60,9 @@
 cmake-build-*/
 build/
 .vscode/
-.vscode/*
+.vscode/**
+dataset/
+dataset/**
 
 # File-based project format
 *.iws
