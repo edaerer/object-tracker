@@ -8,6 +8,8 @@ file(GLOB_RECURSE SRC_FILES "${SRC_ROOT}/*.c")
 
 add_executable(object-tracker ${SRC_FILES})
 
+find_package(glfw3 REQUIRED)
+
 target_link_directories(object-tracker
         PRIVATE ${CMAKE_SOURCE_DIR}/lib
 )
@@ -16,6 +18,8 @@ target_include_directories(object-tracker
 )
 target_link_libraries(object-tracker
         PRIVATE m
+        PRIVATE glfw
+        PRIVATE glad
         PRIVATE darknet
 )
 target_compile_definitions(object-tracker

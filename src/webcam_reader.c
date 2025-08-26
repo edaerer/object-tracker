@@ -62,7 +62,7 @@ void close_reader(const char *path) {
     close(fd);
 }
 
-imgdat_s load_data() {
+imgdat_s load_imgdat() {
     struct v4l2_buffer dqbuf = {0};
     dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     dqbuf.memory = V4L2_MEMORY_MMAP;
