@@ -1,13 +1,11 @@
 #ifdef MP4_READER
 
 #include <fcntl.h>
-#include <frame_utils.h>
 #include <unistd.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <sys/poll.h>
-#include <image_reader.h>
 
 #define WIDTH   1280
 #define HEIGHT  720

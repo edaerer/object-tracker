@@ -1,12 +1,12 @@
 #ifdef WEBCAM_READER
 
 #include <fcntl.h>
-#include <frame_utils.h>
 #include <unistd.h>
 #include <linux/videodev2.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
-#include <image_reader.h>
+#include <tracker/frame_utils.h>
+#include <tracker/image_reader.h>
 
 #define WIDTH   640
 #define HEIGHT  480
@@ -62,7 +62,7 @@ void close_reader(const char *path) {
     close(fd);
 }
 
-imgdat_s load_data() {
+imgdat_s load_imgdat() {
     struct v4l2_buffer dqbuf = {0};
     dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     dqbuf.memory = V4L2_MEMORY_MMAP;

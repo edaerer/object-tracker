@@ -18,6 +18,6 @@ void init_reader(const char *path);
 
 void close_reader(const char *path);
 
-imgdat_s load_data();
+imgdat_s load_imgdat();
 
 #endif // IMAGE_READER_H
