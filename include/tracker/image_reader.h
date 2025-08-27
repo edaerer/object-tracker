@@ -4,11 +4,9 @@
 #include <stdlib.h>
 
 typedef struct {
-    int   w;
-    int   h;
-    int   c;
-    void* start;
-} imgdata;
+    int   w, h, c;
+    void* data;
+} imgframe;
 
 typedef struct {
     int   fd;
@@ -23,11 +21,8 @@ typedef struct {
 
 
 imgreader* imgreader_init(const char* path, int w, int h);
-
 int        imgreader_close(imgreader* reader);
-
-int        imgdata_load(imgreader* reader, imgdata* data);
-
-int        imgdata_free(imgdata* data);
+int        imgdata_load(imgreader* reader, imgframe* frame);
+int        imgdata_free(imgframe* frame);
 
 #endif  // IMAGE_READER_H

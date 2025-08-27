@@ -74,7 +74,7 @@ int imgreader_close(imgreader* reader) {
     return 1;
 }
 
-int imgdata_load(imgreader* reader, imgdata* data) {
+int imgdata_load(imgreader* reader, imgframe* frame) {
     struct v4l2_buffer dqbuf = {0};
     dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     dqbuf.memory = V4L2_MEMORY_MMAP;
@@ -83,10 +83,10 @@ int imgdata_load(imgreader* reader, imgdata* data) {
         return 0;
     }
 
-    data->w = reader->w;
-    data->h = reader->h;
-    data->c = reader->c;
-    data->start = yuyv_to_rgb(reader->buffer.data, reader->w, reader->h);
+    frame->w = reader->w;
+    frame->h = reader->h;
+    frame->c = reader->c;
+    frame->data = yuyv_to_rgb(reader->buffer.data, reader->w, reader->h);
 
     if (ioctl(reader->fd, VIDIOC_QBUF, &dqbuf) < 0) {
         return 0;
@@ -95,9 +95,9 @@ int imgdata_load(imgreader* reader, imgdata* data) {
     return 1;
 }
 
-int imgdata_free(imgdata* data) {
-    free(data);
-    free(data->start);
+int imgdata_free(imgframe* frame) {
+    free(frame);
+    free(frame->data);
 }
 
 #endif  // WEBCAM_READER

@@ -387,18 +387,18 @@ int main(int argc, char *argv[]) {
     set_batch_network(net, 1);
 
     // ---- Kamera ----
-    imgdata *data = malloc(sizeof(imgdata));
+    imgframe *frame = malloc(sizeof(frame));
     imgreader *reader = imgreader_init("/dev/video0", 640, 480);
     init_gl33_window("YOLO (OpenGL 3.3)", reader->w, reader->h);
     
-    while (!window_should_close_33() && imgdata_load(reader, data)) {
+    while (!window_should_close_33() && imgdata_load(reader, frame)) {
         long time1 = timeInMilliseconds();
 
         image im = {
-            .w = data->w, 
-            .h = data->h, 
-            .c = data->c, 
-            .data = data->start
+            .w = frame->w, 
+            .h = frame->h, 
+            .c = frame->c, 
+            .data = frame->data,
         };
 
         // 3) Ağ girişi için letterbox
@@ -514,7 +514,7 @@ int main(int argc, char *argv[]) {
 
     // ---- Kapanış ----
     shutdown_gl33();
-    imgdata_free(data);
+    imgdata_free(frame);
     imgreader_close(reader);
     free_network(net);
     return 0;

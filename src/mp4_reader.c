@@ -18,11 +18,11 @@ int imgreader_close(imgreader* reader) {
     return 0;
 }
 
-int imgdata_load(imgreader* reader, imgdata* data) {
+int imgdata_load(imgreader* reader, imgframe* frame) {
     return 0;
 }
 
-int imgdata_free(imgdata* data) {
+int imgdata_free(imgframe* frame) {
     return 0;
 }
 
