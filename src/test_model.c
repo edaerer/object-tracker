@@ -399,7 +399,12 @@ int main(int argc, char *argv[]) {
 
         // 1) Kameradan kare al
         imgdat_s imgdat = load_imgdat();
-        image im = {.w = imgdat.w, .h = imgdat.h, .c = imgdat.c, .data = imgdat.start};
+        image im = {
+            .w = imgdat.w, 
+            .h = imgdat.h, 
+            .c = imgdat.c, 
+            .data = imgdat.start
+        };
 
         // 2) İlk karede pencereyi aç (orijinal çözünürlükte)
         if (!window_initialized) {

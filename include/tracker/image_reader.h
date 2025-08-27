@@ -4,8 +4,9 @@
 #include <stdlib.h>
 
 typedef struct {
-    int w, h, c;
-    int length;
+    int w;
+    int h;
+    int c;
     void *start;
 } imgdat_s;
 
