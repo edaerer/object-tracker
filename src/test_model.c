@@ -1,8 +1,8 @@
-#ifdef TEST_REALNET_MODEL
+#ifdef TEST_MODEL
 
+#include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <darknet/darknet.h>
-#include <glad/glad.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -530,5 +530,4 @@ int main(int argc, char *argv[]) {
     return 0;
 }
 
-
-#endif
+#endif // TEST_MODEL

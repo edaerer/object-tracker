@@ -31,8 +31,8 @@ target_link_libraries(object-tracker
 
 # Compile definations for executable file
 target_compile_definitions(object-tracker
+        PUBLIC TEST_MODEL
         PUBLIC WEBCAM_READER
-        PUBLIC TEST_REALNET_MODEL
 )
 
 # Target properties to specify lib directory according to runtime origin
