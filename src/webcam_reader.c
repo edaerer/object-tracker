@@ -96,8 +96,8 @@ int imgdata_load(imgreader* reader, imgframe* frame) {
 }
 
 int imgdata_free(imgframe* frame) {
-    free(frame);
     free(frame->data);
+    free(frame);
 }
 
 #endif  // WEBCAM_READER
