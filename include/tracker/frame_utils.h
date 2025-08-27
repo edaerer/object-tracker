@@ -8,7 +8,7 @@ double clamp(const double v) {
     return v < 0 ? 0 : v > 255 ? 255 : v;
 }
 
-float *yuyv_to_rgb(const unsigned char *yuyv, int w, int h) {
+float* yuyv_to_rgb(const unsigned char* yuyv, int w, int h) {
     float *data = malloc(w * h * 3 * sizeof(float));
 
     for (int y = 0; y < h; ++y) {

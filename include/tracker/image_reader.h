@@ -4,21 +4,30 @@
 #include <stdlib.h>
 
 typedef struct {
-    int w;
-    int h;
-    int c;
-    void *start;
-} imgdat_s;
+    int   w;
+    int   h;
+    int   c;
+    void* start;
+} imgdata;
+
+typedef struct {
+    int   fd;
+    int   w, h, c;
+    void* params;
+
+    struct {
+        int   size;
+        void* data;
+    } buffer;
+} imgreader;
 
 
-static void free_imgdat(const imgdat_s data) {
-    free(data.start);
-}
+imgreader* imgreader_init(const char* path, int w, int h);
 
-void init_reader(const char *path);
+int        imgreader_close(imgreader* reader);
 
-void close_reader(const char *path);
+int        imgdata_load(imgreader* reader, imgdata* data);
 
-imgdat_s load_imgdat();
+int        imgdata_free(imgdata* data);
 
-#endif // IMAGE_READER_H
+#endif  // IMAGE_READER_H

@@ -2,82 +2,102 @@
 
 #include <fcntl.h>
 #include <linux/videodev2.h>
+#include <string.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 #include <tracker/frame_utils.h>
 #include <tracker/image_reader.h>
 #include <unistd.h>
 
-#define WIDTH 640
-#define HEIGHT 480
-
-static int fd;
-static int buf_len;
-static int req_type;
-static void *ptr;
-
-void init_reader(const char *path) {
-    fd = open(path, O_RDWR);
-
+imgreader* imgreader_init(const char* path, int w, int h) {
     struct v4l2_format fmt = {
-            .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
-            .fmt.pix.width = WIDTH,
-            .fmt.pix.height = HEIGHT,
-            .fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV,
-            .fmt.pix.field = V4L2_FIELD_NONE,
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .fmt.pix.width = w,
+        .fmt.pix.height = h,
+        .fmt.pix.pixelformat = V4L2_PIX_FMT_YUYV,
+        .fmt.pix.field = V4L2_FIELD_NONE,
     };
     struct v4l2_requestbuffers req = {
-            .count = 1,
-            .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
-            .memory = V4L2_MEMORY_MMAP,
+        .count = 1,
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
     };
     struct v4l2_buffer buf = {
-            .index = 0,
-            .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
-            .memory = V4L2_MEMORY_MMAP,
+        .index = 0,
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
     };
     struct v4l2_buffer qbuf = {
-            .index = 0,
-            .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
-            .memory = V4L2_MEMORY_MMAP,
+        .index = 0,
+        .type = V4L2_BUF_TYPE_VIDEO_CAPTURE,
+        .memory = V4L2_MEMORY_MMAP,
     };
 
-    ioctl(fd, VIDIOC_S_FMT, &fmt);
-    ioctl(fd, VIDIOC_REQBUFS, &req);
-    ioctl(fd, VIDIOC_QUERYBUF, &buf);
+    imgreader* reader = malloc(sizeof(imgreader));
+    reader->fd = open(path, O_RDWR);
 
-    buf_len = buf.length;
-    req_type = req.type;
-    ptr = mmap(NULL, buf.length, PROT_READ | PROT_WRITE, MAP_SHARED, fd, buf.m.offset);
+    ioctl(reader->fd, VIDIOC_S_FMT, &fmt);
+    ioctl(reader->fd, VIDIOC_G_FMT, &fmt);
+    ioctl(reader->fd, VIDIOC_REQBUFS, &req);
+    ioctl(reader->fd, VIDIOC_QUERYBUF, &buf);
+
+    reader->w = fmt.fmt.pix.width;
+    reader->h = fmt.fmt.pix.height;
+    reader->c = 3;
+    reader->params = malloc(sizeof(int));
+    reader->buffer.size = buf.length;
+    reader->buffer.data = mmap(NULL, buf.length, PROT_READ | PROT_WRITE,
+                               MAP_SHARED, reader->fd, buf.m.offset);
+
+    memcpy(reader->params, &req.type, sizeof(int));
+
     enum v4l2_buf_type type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
 
-    ioctl(fd, VIDIOC_QBUF, &qbuf);
-    ioctl(fd, VIDIOC_STREAMON, &type);
+    ioctl(reader->fd, VIDIOC_QBUF, &qbuf);
+    ioctl(reader->fd, VIDIOC_STREAMON, &type);
+
+    return reader;
 }
 
-void close_reader(const char *path) {
-    ioctl(fd, VIDIOC_STREAMOFF, &req_type);
-    munmap(ptr, buf_len);
-    close(fd);
+int imgreader_close(imgreader* reader) {
+    int reqtype;
+    memcpy(&reqtype, reader->params, sizeof(int));
+
+    ioctl(reader->fd, VIDIOC_STREAMOFF, &reqtype);
+    munmap(reader->buffer.data, reader->buffer.size);
+    close(reader->fd);
+
+    free(reader->buffer.data);
+    free(reader->params);
+    free(reader);
+
+    return 1;
 }
 
-imgdat_s load_imgdat() {
+int imgdata_load(imgreader* reader, imgdata* data) {
     struct v4l2_buffer dqbuf = {0};
     dqbuf.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     dqbuf.memory = V4L2_MEMORY_MMAP;
 
+    if (ioctl(reader->fd, VIDIOC_DQBUF, &dqbuf) < 0) {
+        return 0;
+    }
 
-    ioctl(fd, VIDIOC_DQBUF, &dqbuf);
+    data->w = reader->w;
+    data->h = reader->h;
+    data->c = reader->c;
+    data->start = yuyv_to_rgb(reader->buffer.data, reader->w, reader->h);
 
-    const imgdat_s data = {
-            .w = WIDTH,
-            .h = HEIGHT,
-            .c = 3,
-            .start = yuyv_to_rgb(ptr, WIDTH, HEIGHT),
-    };
+    if (ioctl(reader->fd, VIDIOC_QBUF, &dqbuf) < 0) {
+        return 0;
+    }
 
-    ioctl(fd, VIDIOC_QBUF, &dqbuf);
-    return data;
+    return 1;
 }
 
-#endif // WEBCAM_READER
+int imgdata_free(imgdata* data) {
+    free(data);
+    free(data->start);
+}
+
+#endif  // WEBCAM_READER

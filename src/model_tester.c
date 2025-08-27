@@ -1,5 +1,3 @@
-#ifdef TEST_MODEL
-
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
 #include <darknet/darknet.h>
@@ -378,7 +376,6 @@ int main(int argc, char *argv[]) {
 
     // ---- Ağı yükle ----
     // Not: cfg/weights eşleşmeli. tiny kullanıyorsan ikisini de tiny seç.
-    printf("%d\n", argc);
     const char *cfg = argc >= 2 ? argv[1] : "../config/yolov3-tiny.cfg";
     const char *weights = argc >= 3 ? argv[2] : "../weights/yolov3-tiny.weights";
 
@@ -390,31 +387,19 @@ int main(int argc, char *argv[]) {
     set_batch_network(net, 1);
 
     // ---- Kamera ----
-    init_reader("/dev/video0");
-
-    int window_initialized = 0;
-
-    while (!window_should_close_33()) {
+    imgdata *data = malloc(sizeof(imgdata));
+    imgreader *reader = imgreader_init("/dev/video0", 640, 480);
+    init_gl33_window("YOLO (OpenGL 3.3)", reader->w, reader->h);
+    
+    while (!window_should_close_33() && imgdata_load(reader, data)) {
         long time1 = timeInMilliseconds();
 
-        // 1) Kameradan kare al
-        imgdat_s imgdat = load_imgdat();
         image im = {
-            .w = imgdat.w, 
-            .h = imgdat.h, 
-            .c = imgdat.c, 
-            .data = imgdat.start
+            .w = data->w, 
+            .h = data->h, 
+            .c = data->c, 
+            .data = data->start
         };
-
-        // 2) İlk karede pencereyi aç (orijinal çözünürlükte)
-        if (!window_initialized) {
-            if (!init_gl33_window("YOLO (OpenGL 3.3)", im.w, im.h)) {
-                fprintf(stderr, "OpenGL/GLFW init basarisiz\n");
-                free_imgdat(imgdat);
-                break;
-            }
-            window_initialized = 1;
-        }
 
         // 3) Ağ girişi için letterbox
         image sz = letterbox_image(im, net->w, net->h);
@@ -432,7 +417,6 @@ int main(int argc, char *argv[]) {
             if (dets)
                 free_detections(dets, nboxes);
             free_image(sz);
-            free_imgdat(imgdat);
             break;
         }
 
@@ -519,7 +503,6 @@ int main(int argc, char *argv[]) {
         if (dets)
             free_detections(dets, nboxes);
         free_image(sz);
-        free_imgdat(imgdat);
 
         // 13) Çıkış kontrolü
         if (window_should_close_33())
@@ -531,8 +514,8 @@ int main(int argc, char *argv[]) {
 
     // ---- Kapanış ----
     shutdown_gl33();
+    imgdata_free(data);
+    imgreader_close(reader);
     free_network(net);
     return 0;
 }
-
-#endif // TEST_MODEL

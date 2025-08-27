@@ -31,7 +31,6 @@ target_link_libraries(object-tracker
 
 # Compile definations for executable file
 target_compile_definitions(object-tracker
-        PUBLIC TEST_MODEL
         PUBLIC WEBCAM_READER
 )
 

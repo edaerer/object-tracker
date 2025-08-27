@@ -7,15 +7,23 @@
 #include <sys/poll.h>
 #include <unistd.h>
 
-#define WIDTH 1280
+#define WIDTH  1280
 #define HEIGHT 720
 
-static int fd;
+imgreader* imgreader_init(const char* path, int w, int h) {
+    return NULL;
+}
 
-void init_reader(const char *path) {}
+int imgreader_close(imgreader* reader) {
+    return 0;
+}
 
-void close_reader(const char *path) {}
+int imgdata_load(imgreader* reader, imgdata* data) {
+    return 0;
+}
 
-imgdat_s load_data() { return NULL; }
+int imgdata_free(imgdata* data) {
+    return 0;
+}
 
-#endif // MP4_READER
+#endif  // MP4_READER
