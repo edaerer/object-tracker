@@ -6,6 +6,9 @@
 #include "skybox.h"
 #include "textShowing.h"
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 #include <time.h>
 
 #define KEYBOARD_ENABLED 1
@@ -14,6 +17,7 @@ GLFWwindow *window;
 const int SCR_WIDTH = 1920;
 const int SCR_HEIGHT = 1080;
 bool isCrashed = false;
+mat4 g_view, g_proj;
 vec3 lightDirection = {0.0f, 1.0f, 0.0f};
 vec3 crashPosition;
 bool hasSetCrashView = false;
@@ -54,6 +58,7 @@ const unsigned char *heightMapImageData = NULL;
 GLuint heightMapTextureID;
 const float HEIGHT_SCALE_FACTOR = 500.0f;
 bool isTriangleViewMode = false;
+static int screenshot_index = 0;
 
 void INIT_SYSTEM();
 void DRAW_SYSTEM();
@@ -62,6 +67,7 @@ void update_camera_and_view_matrix(mat4 view);
 void processInput();
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
 void whereItCrashed();
+void save_frame_png();
 GLuint createShaderProgram(const char *vsSource, const char *fsSource);
 
 static double get_current_time_seconds() {
@@ -99,18 +105,17 @@ int main() {
             processInput();
         } else {
             if (startingAutoPilotMode) {
-                currentMovementSpeed = 100.0f;
+                currentMovementSpeed = 300.0f;
                 startingAutoPilotMode = false;
             }
             autoPilotMode();
         }
 
-        DRAW_SYSTEM();
-
-        for (int i=1; i<MAX_PLANES; i++) {
-            update_enemy_plane(&planes[i]);
+        for (int i = 1; i < MAX_PLANES; i++) {
+            update_enemy_plane(&planes[i]);   // önce güncelle
         }
-
+        DRAW_SYSTEM();                         // sonra çiz
+        save_frame_png();
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -223,32 +228,30 @@ void DRAW_SYSTEM() {
     glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    mat4 proj, view;
-    glm_perspective(glm_rad(fov), (float) SCR_WIDTH / (float) SCR_HEIGHT, 0.1f, 20000.0f, proj);
-
+    glm_perspective(glm_rad(fov), (float)SCR_WIDTH/(float)SCR_HEIGHT, 0.1f, 20000.0f, g_proj);
     if (!isCrashed) {
-        update_camera_and_view_matrix(view);
-    } else {
-        vec3 center;
-        glm_vec3_add(cameraPos, cameraFront, center);
-        glm_lookat(cameraPos, center, cameraUp, view);
+        update_camera_and_view_matrix(g_view);
+    } else { 
+            vec3 center;
+            glm_vec3_add(cameraPos, cameraFront, center);
+            glm_lookat(cameraPos, center, cameraUp, g_view);
     }
 
-    draw_skybox(view, proj);
+    draw_skybox(g_view, g_proj);
     update_chunks();
-    draw_chunks(view, proj);
+    draw_chunks(g_view, g_proj);
 
     update_minimap_dot();
 
     if (!isCrashed) {
         for (int i=0; i<MAX_PLANES; i++) {
-            draw_plane(&planes[i], view, proj);
+            draw_plane(&planes[i], g_view, g_proj);
         }
     }
 
     glDisable(GL_DEPTH_TEST);
     if (isCrashed) {
-        draw_crash_marker(view, proj);
+        draw_crash_marker(g_view, g_proj);
     }
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
@@ -261,6 +264,30 @@ void DRAW_SYSTEM() {
     glDisable(GL_BLEND);
     glEnable(GL_DEPTH_TEST);
 }
+
+static void build_plane_model_matrix(const Plane *p, mat4 model) {
+    mat4 rot, trans;
+    glm_mat4_identity(rot);
+    glm_vec3_copy(p->right, rot[0]);             // kolon 0
+    glm_vec3_copy(p->up,    rot[1]);             // kolon 1
+    vec3 nf; glm_vec3_negate_to(p->front, nf);
+    glm_vec3_copy(nf,       rot[2]);             // kolon 2 (OpenGL ileri -Z)
+
+    glm_translate_make(trans, p->position);
+    glm_mat4_mul(trans, rot, model);             // model = T * R
+}
+
+static int project_screen_from_clip(const vec4 clip, int sw, int sh, float *sx, float *sy) {
+    if (clip[3] <= 0.0f) return 0;               // kamera arkası -> geçersiz
+    float ndc_x = clip[0] / clip[3];
+    float ndc_y = clip[1] / clip[3];
+
+    // x: [-1,1] -> [0,sw],  y: flipli görüntüye göre üstten aşağı
+    *sx = (ndc_x * 0.5f + 0.5f) * (float)sw;
+    *sy = (1.0f - (ndc_y * 0.5f + 0.5f)) * (float)sh;
+    return 1;
+}
+
 
 void update_camera_and_view_matrix(mat4 view) {
     if (isCrashed) {
@@ -295,6 +322,135 @@ void update_camera_and_view_matrix(mat4 view) {
     }
     glm_lookat(cameraPos, lookAtTarget, planes[0].up, view);
 }
+
+void project_point(const vec3 world, const mat4 view, const mat4 proj,
+                   int screen_w, int screen_h, float *out_x, float *out_y) {
+    vec4 tmp = {world[0], world[1], world[2], 1.0f};
+    vec4 clip;
+    glm_mat4_mulv(view, tmp, tmp);
+    glm_mat4_mulv(proj, tmp, clip);
+    if (clip[3] != 0.0f) {
+        clip[0] /= clip[3];
+        clip[1] /= clip[3];
+    }
+    *out_x = (clip[0] * 0.5f + 0.5f) * screen_w;
+    *out_y = (clip[1] * 0.5f + 0.5f) * screen_h;
+}
+
+void save_labels_for_planes(const char *img_path, const mat4 view, const mat4 proj) {
+    char label_path[256];
+    snprintf(label_path, sizeof(label_path), "%.*s.txt",
+             (int)(strlen(img_path) - 4), img_path); // .png -> .txt
+
+    FILE *f = fopen(label_path, "w");
+    if (!f) return;
+
+    int sw = SCR_WIDTH, sh = SCR_HEIGHT;
+
+    // Uçağın yaklaşık lokal yarıçapları (modeline göre ayarlayabilirsin)
+    const float half_w = 50.0f;   // sağ-sol
+    const float half_h = 20.0f;   // alt-üst
+    const float half_l = 50.0f;   // ön-arka
+
+    // Lokal uzay köşeleri (OBB)
+    const vec3 local_corners[8] = {
+        {-half_w, -half_h, -half_l}, {+half_w, -half_h, -half_l},
+        {-half_w, +half_h, -half_l}, {+half_w, +half_h, -half_l},
+        {-half_w, -half_h, +half_l}, {+half_w, -half_h, +half_l},
+        {-half_w, +half_h, +half_l}, {+half_w, +half_h, +half_l},
+    };
+
+    for (int i = 1; i < MAX_PLANES; i++) {          // 0. uçağı etiketleme
+        const Plane *pl = &planes[i];
+
+        // model ve mvp
+        mat4 model, pv, mvp;
+        build_plane_model_matrix(pl, model);
+        glm_mat4_mul(proj, view, pv);               // pv = proj * view
+        glm_mat4_mul(pv, model, mvp);               // mvp = pv * model
+
+        float minx = (float)sw, miny = (float)sh, maxx = 0.0f, maxy = 0.0f;
+        int valid = 0;
+
+        for (int j = 0; j < 8; j++) {
+            vec4 v = { local_corners[j][0], local_corners[j][1], local_corners[j][2], 1.0f };
+            vec4 clip;
+            glm_mat4_mulv(mvp, v, clip);
+
+            float sx, sy;
+            if (!project_screen_from_clip(clip, sw, sh, &sx, &sy)) continue;
+
+            if (sx < minx) minx = sx;
+            if (sx > maxx) maxx = sx;
+            if (sy < miny) miny = sy;
+            if (sy > maxy) maxy = sy;
+            valid++;
+        }
+
+        if (valid == 0) continue; // tamamen görünmüyor
+
+        // Ekran sınırlarına kırp
+        if (minx < 0) minx = 0;
+        if (miny < 0) miny = 0;
+        if (maxx > sw) maxx = (float)sw;
+        if (maxy > sh) maxy = (float)sh;
+
+        float bw = maxx - minx;
+        float bh = maxy - miny;
+        if (bw <= 1.0f || bh <= 1.0f) continue; // çok küçük / geçersiz
+
+        float cx = (minx + maxx) * 0.5f;
+        float cy = (miny + maxy) * 0.5f;
+
+        // YOLO: normalize
+        float x = cx / (float)sw;
+        float y = cy / (float)sh;
+        float w = bw / (float)sw;
+        float h = bh / (float)sh;
+
+        // clamp
+        if (x < 0) x = 0; if (x > 1) x = 1;
+        if (y < 0) y = 0; if (y > 1) y = 1;
+        if (w < 0) w = 0; if (w > 1) w = 1;
+        if (h < 0) h = 0; if (h > 1) h = 1;
+
+        // class id: 0 (istersen i’ye göre farklı sınıf yaz)
+        fprintf(f, "0 %.6f %.6f %.6f %.6f\n", x, y, w, h);
+    }
+
+    fclose(f);
+}
+
+void save_frame_png(void) {
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+
+    const int channels = 4;
+    const int stride   = w * channels;
+    const size_t size  = (size_t)stride * h;
+    unsigned char *pixels = (unsigned char*)malloc(size);
+    if (!pixels) return;
+
+    glFlush();
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+
+    // Görüntüyü dosyaya üstten-aşağı kaydet (label projeksiyonuyla tutarlı)
+    stbi_flip_vertically_on_write(1);
+
+    char path[128];
+    snprintf(path, sizeof(path), "../imgs/image_%06d.tga", screenshot_index++);
+
+    // PNG olarak YAZ (daha önce .png ismine TGA yazıyordu)
+    stbi_write_tga(path, w, h, channels, pixels);
+
+    // ZATEN DRAW_SYSTEM içinde g_view ve g_proj hesaplandı, tekrar hesaplama!
+    save_labels_for_planes(path, g_view, g_proj);
+
+    free(pixels);
+}
+
+
 void processInput() {
     if (!isCrashed) {
         if (glfwGetKey(window, GLFW_KEY_1)) {
