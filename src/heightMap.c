@@ -290,8 +290,8 @@ void update_chunks()
     if (isCrashed)
         return;
 
-    int camChunkX = floorf(planePos[0] / EDGE_SIZE_OF_EACH_CHUNK);
-    int camChunkZ = floorf(planePos[2] / EDGE_SIZE_OF_EACH_CHUNK);
+    int camChunkX = floorf(planes[0].position[0] / EDGE_SIZE_OF_EACH_CHUNK);
+    int camChunkZ = floorf(planes[0].position[2] / EDGE_SIZE_OF_EACH_CHUNK);
 
     bool is_chunk_required[TOTAL_CHUNKS] = {false};
     for (int dz = 0; dz < CHUNK_GRID_DIM; dz++)
