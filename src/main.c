@@ -228,7 +228,7 @@ void DRAW_SYSTEM() {
     glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
-    glm_perspective(glm_rad(fov), (float)SCR_WIDTH/(float)SCR_HEIGHT, 0.1f, 20000.0f, g_proj);
+    glm_perspective(glm_rad(fov), (float)SCR_WIDTH/(float)SCR_HEIGHT, 5.0f, 5000.0f, g_proj);
     if (!isCrashed) {
         update_camera_and_view_matrix(g_view);
     } else { 
