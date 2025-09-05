@@ -6,7 +6,7 @@ BIN_DIR   := bin
 CC := gcc
 
 CFLAGS  := -std=c99 -I$(INC_DIR) -w
-LIBS    := -lGL -lglfw -lm
+LIBS    := -Llib -lGL -lglfw -lm -L./lib -l:libdarknet.so -Wl,-rpath=./lib
 
 SOURCES := $(wildcard $(SRC_DIR)/*.c)
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
@@ -26,7 +26,7 @@ $(BUILD_DIR) $(BIN_DIR):
 	mkdir -p $@
 
 clean:
-	rm -rf $(BUILD_DIR) $(BIN_DIR)
+	rm -rf $(BUILD_DIR) $(BIN_DIR)/main
 
 rebuild: clean all
 

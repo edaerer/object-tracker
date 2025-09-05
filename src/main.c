@@ -6,6 +6,9 @@
 #include "skybox.h"
 #include "textShowing.h"
 
+#define DARKNET_INCLUDE_ORIGINAL_API
+#include "darknet.h"
+
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
@@ -59,6 +62,11 @@ GLuint heightMapTextureID;
 const float HEIGHT_SCALE_FACTOR = 500.0f;
 bool isTriangleViewMode = false;
 static int screenshot_index = 0;
+static GLuint box_vbo = 0;
+static GLuint box_shader_program = 0;
+static network *g_net = NULL;
+static int g_classes = 0;
+static float g_thresh = 0.25f, g_nms = 0.45f;
 
 void INIT_SYSTEM();
 void DRAW_SYSTEM();
@@ -67,7 +75,9 @@ void update_camera_and_view_matrix(mat4 view);
 void processInput();
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
 void whereItCrashed();
-void save_frame_png();
+void detect_planes();
+void init_darknet();
+void init_box_drawing();
 GLuint createShaderProgram(const char *vsSource, const char *fsSource);
 
 static double get_current_time_seconds() {
@@ -75,6 +85,9 @@ static double get_current_time_seconds() {
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double) now.tv_sec + (double) now.tv_nsec / 1000000000.0;
 }
+
+
+// C++ fonksiyonlarının C'ye uygun bir şekilde tanımlanması
 
 int main() {
     if (!glfwInit()) {
@@ -99,6 +112,8 @@ int main() {
     glfwSetInputMode(window, GLFW_CURSOR, GLFW_CURSOR_NORMAL);
 
     INIT_SYSTEM();
+    init_box_drawing();
+    init_darknet("yolov4-tiny.cfg", "yolov4-tiny-best.weights");
 
     while (!glfwWindowShouldClose(window)) {
         if (KEYBOARD_ENABLED) {
@@ -115,7 +130,7 @@ int main() {
             update_enemy_plane(&planes[i]);   // önce güncelle
         }
         DRAW_SYSTEM();                         // sonra çiz
-        save_frame_png();
+        //detect_planes();
         glfwSwapBuffers(window);
         glfwPollEvents();
     }
@@ -337,116 +352,178 @@ void project_point(const vec3 world, const mat4 view, const mat4 proj,
     *out_y = (clip[1] * 0.5f + 0.5f) * screen_h;
 }
 
-void save_labels_for_planes(const char *img_path, const mat4 view, const mat4 proj) {
-    char label_path[256];
-    snprintf(label_path, sizeof(label_path), "%.*s.txt",
-             (int)(strlen(img_path) - 4), img_path); // .png -> .txt
+static image make_image_from_gl_rgb(const unsigned char *rgb, int w, int h, int flip_y){
+    image im = make_image(w, h, 4); // CHW
+    // rgb -> im.data (CHW, 0..1)
+    for (int y = 0; y < h; ++y) {
+        int src_y = flip_y ? (h - 1 - y) : y;
+        const unsigned char *row = rgb + (size_t)src_y * w * 4;
+        for (int x = 0; x < w; ++x) {
+            int idx = x * 4;
+            float r = row[idx + 0] / 255.0f;
+            float g = row[idx + 1] / 255.0f;
+            float b = row[idx + 2] / 255.0f;
 
-    FILE *f = fopen(label_path, "w");
-    if (!f) return;
-
-    int sw = SCR_WIDTH, sh = SCR_HEIGHT;
-
-    // Uçağın yaklaşık lokal yarıçapları (modeline göre ayarlayabilirsin)
-    const float half_w = 50.0f;   // sağ-sol
-    const float half_h = 20.0f;   // alt-üst
-    const float half_l = 50.0f;   // ön-arka
-
-    // Lokal uzay köşeleri (OBB)
-    const vec3 local_corners[8] = {
-        {-half_w, -half_h, -half_l}, {+half_w, -half_h, -half_l},
-        {-half_w, +half_h, -half_l}, {+half_w, +half_h, -half_l},
-        {-half_w, -half_h, +half_l}, {+half_w, -half_h, +half_l},
-        {-half_w, +half_h, +half_l}, {+half_w, +half_h, +half_l},
-    };
-
-    for (int i = 1; i < MAX_PLANES; i++) {          // 0. uçağı etiketleme
-        const Plane *pl = &planes[i];
-
-        // model ve mvp
-        mat4 model, pv, mvp;
-        build_plane_model_matrix(pl, model);
-        glm_mat4_mul(proj, view, pv);               // pv = proj * view
-        glm_mat4_mul(pv, model, mvp);               // mvp = pv * model
-
-        float minx = (float)sw, miny = (float)sh, maxx = 0.0f, maxy = 0.0f;
-        int valid = 0;
-
-        for (int j = 0; j < 8; j++) {
-            vec4 v = { local_corners[j][0], local_corners[j][1], local_corners[j][2], 1.0f };
-            vec4 clip;
-            glm_mat4_mulv(mvp, v, clip);
-
-            float sx, sy;
-            if (!project_screen_from_clip(clip, sw, sh, &sx, &sy)) continue;
-
-            if (sx < minx) minx = sx;
-            if (sx > maxx) maxx = sx;
-            if (sy < miny) miny = sy;
-            if (sy > maxy) maxy = sy;
-            valid++;
+            im.data[0 * w * h + y * w + x] = r; // R
+            im.data[1 * w * h + y * w + x] = g; // G
+            im.data[2 * w * h + y * w + x] = b; // B
         }
-
-        if (valid == 0) continue; // tamamen görünmüyor
-
-        // Ekran sınırlarına kırp
-        if (minx < 0) minx = 0;
-        if (miny < 0) miny = 0;
-        if (maxx > sw) maxx = (float)sw;
-        if (maxy > sh) maxy = (float)sh;
-
-        float bw = maxx - minx;
-        float bh = maxy - miny;
-        if (bw <= 1.0f || bh <= 1.0f) continue; // çok küçük / geçersiz
-
-        float cx = (minx + maxx) * 0.5f;
-        float cy = (miny + maxy) * 0.5f;
-
-        // YOLO: normalize
-        float x = cx / (float)sw;
-        float y = cy / (float)sh;
-        float w = bw / (float)sw;
-        float h = bh / (float)sh;
-
-        // clamp
-        if (x < 0) x = 0; if (x > 1) x = 1;
-        if (y < 0) y = 0; if (y > 1) y = 1;
-        if (w < 0) w = 0; if (w > 1) w = 1;
-        if (h < 0) h = 0; if (h > 1) h = 1;
-
-        // class id: 0 (istersen i’ye göre farklı sınıf yaz)
-        fprintf(f, "0 %.6f %.6f %.6f %.6f\n", x, y, w, h);
     }
-
-    fclose(f);
+    return im;
 }
 
-void save_frame_png(void) {
+void init_darknet(const char *cfg, const char *weights) {
+    // (GPU kullanıyorsan) cuda_set_device(0);
+    g_net = load_network((char*)cfg, (char*)weights, 0);
+    set_batch_network(g_net, 1);
+    fuse_conv_batchnorm(*g_net);
+
+    // son katmandan sınıf sayısını çek
+    layer l = g_net->layers[g_net->n - 1];
+    g_classes = l.classes;
+}
+
+// Kutu çizimi için shader programı oluştur
+void init_box_drawing() {
+    const char *vertex_shader =
+        "attribute vec2 position;\n"
+        "void main() {\n"
+        "    gl_Position = vec4(position, 0.0, 1.0);\n"
+        "}\n";
+
+    const char *fragment_shader =
+        "precision mediump float;\n"
+        "uniform vec4 color;\n"
+        "void main() {\n"
+        "    gl_FragColor = color;\n"
+        "}\n";
+
+    box_shader_program = createShaderProgram(vertex_shader, fragment_shader);
+
+    // Sadece VBO oluştur (VAO yok)
+    glGenBuffers(1, &box_vbo);
+    glBindBuffer(GL_ARRAY_BUFFER, box_vbo);
+    glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void CLEANUP_SYSTEM() {
+    cleanup_plane();
+    cleanup_heightmap();
+    cleanup_skybox();
+    cleanup_minimap();
+    cleanup_ui();
+    cleanup_crash_marker();
+    cleanup_osd();
+    
+    // Kutu çizimi için kaynakları temizle (VAO yok)
+    if (box_vbo) glDeleteBuffers(1, &box_vbo);
+    if (box_shader_program) glDeleteProgram(box_shader_program);
+}
+
+void drawBoundingBox(int left, int top, int right, int bottom) {
+    // Normalize edilmiş ekran koordinatlarına dönüştür
+    float normalized_left = 2.0f * left / SCR_WIDTH - 1.0f;
+    float normalized_right = 2.0f * right / SCR_WIDTH - 1.0f;
+    float normalized_top = 1.0f - 2.0f * top / SCR_HEIGHT;
+    float normalized_bottom = 1.0f - 2.0f * bottom / SCR_HEIGHT;
+
+    // Kutu köşe noktaları (LINE_LOOP için)
+    float vertices[] = {
+        normalized_left, normalized_top,     // sol üst
+        normalized_right, normalized_top,    // sağ üst
+        normalized_right, normalized_bottom, // sağ alt
+        normalized_left, normalized_bottom   // sol alt
+    };
+
+    // Shader programını kullan
+    glUseProgram(box_shader_program);
+    
+    // Renk uniform'unu ayarla (kırmızı)
+    GLint color_loc = glGetUniformLocation(box_shader_program, "color");
+    glUniform4f(color_loc, 1.0f, 0.0f, 0.0f, 1.0f); // RGBA: kırmızı
+    
+    // Vertex buffer'ı güncelle
+    glBindBuffer(GL_ARRAY_BUFFER, box_vbo);
+    glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices);
+    
+    // Vertex attrib array'ini etkinleştir ve ayarla
+    GLint position_attr = glGetAttribLocation(box_shader_program, "position");
+    glEnableVertexAttribArray(position_attr);
+    glVertexAttribPointer(position_attr, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+    
+    // Kutuyu çiz
+    glDrawArrays(GL_LINE_LOOP, 0, 4);
+    
+    // Temizlik
+    glDisableVertexAttribArray(position_attr);
+    glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void detect_planes(void) {
+    if (!g_net) {
+        printf("Darknet ağı yüklenmemiş.\n");
+        return;
+    }
+
     int w, h;
     glfwGetFramebufferSize(window, &w, &h);
 
-    const int channels = 4;
-    const int stride   = w * channels;
-    const size_t size  = (size_t)stride * h;
-    unsigned char *pixels = (unsigned char*)malloc(size);
-    if (!pixels) return;
+    // OpenGL framebuffer'dan RGB verilerini al
+    unsigned char *pixels = malloc(w * h * 4);
+    if (!pixels) {
+        printf("Hafıza tahsisi başarısız.\n");
+        return;
+    }
 
     glFlush();
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
 
-    // Görüntüyü dosyaya üstten-aşağı kaydet (label projeksiyonuyla tutarlı)
-    stbi_flip_vertically_on_write(1);
+    // GL alt orijin -> ekran üst orijin dönüşümü (Y ekseni ters çevrilmiş)
+    image im = make_image_from_gl_rgb(pixels, w, h, 1); // Flip Y
 
-    char path[128];
-    snprintf(path, sizeof(path), "../imgs/image_%06d.tga", screenshot_index++);
+    // Darknet input boyutlarına göre letterbox yap
+    int netw = g_net->w, neth = g_net->h;
+    image sized = letterbox_image(im, netw, neth); // Letterbox ile boyutlandır
 
-    // PNG olarak YAZ (daha önce .png ismine TGA yazıyordu)
-    stbi_write_tga(path, w, h, channels, pixels);
+    // Ağırlıkları kullanarak tahmin yap
+    network_predict(*g_net, sized.data);
 
-    // ZATEN DRAW_SYSTEM içinde g_view ve g_proj hesaplandı, tekrar hesaplama!
-    save_labels_for_planes(path, g_view, g_proj);
+    // Detections - tespit edilen nesneler
+    int nboxes = 0;
+    detection *dets = get_network_boxes(g_net, w, h, g_thresh, 0.5f, 0, 1, &nboxes, 0);
 
+    // Non-Maximum Suppression (NMS) ile gereksiz kutuları temizle
+    if (dets && nboxes > 0) {
+        do_nms_sort(dets, nboxes, g_net->layers[g_net->n - 1].classes, g_nms);
+    }
+
+    // Tespit edilen nesneleri işleyip ekrana çiz
+    for (int i = 0; i < nboxes; i++) {
+        for (int c = 0; c < g_net->layers[g_net->n - 1].classes; c++) {
+            float p = dets[i].prob ? dets[i].prob[c] : 0.0f;
+            if (p > 0.25f) {
+                box bbox = dets[i].bbox;
+                int left = (int)(bbox.x - bbox.w / 2);
+                int right = (int)(bbox.x + bbox.w / 2);
+                int top = (int)(bbox.y - bbox.h / 2);
+                int bottom = (int)(bbox.y + bbox.h / 2);
+
+                if (left < 0) left = 0; if (right > w) right = w;
+                if (top < 0) top = 0; if (bottom > h) bottom = h;
+
+                // Ekrana Bounding Box Çizimi
+                printf("%f\n", p);
+                drawBoundingBox(left, top, right, bottom);
+            }
+        }
+    }
+
+    // Bellek temizliği
+    if (dets) free_detections(dets, nboxes);
+    free_image(sized);
+    free_image(im);
     free(pixels);
 }
 
@@ -613,15 +690,6 @@ void processInput() {
     glm_normalize(planes[0].right);
     glm_vec3_cross(planes[0].right, planes[0].front, planes[0].up);
     glm_normalize(planes[0].up);
-}
-void CLEANUP_SYSTEM() {
-    cleanup_plane();
-    cleanup_heightmap();
-    cleanup_skybox();
-    cleanup_minimap();
-    cleanup_ui();
-    cleanup_crash_marker();
-    cleanup_osd();
 }
 void whereItCrashed() {
     cameraPos[1] = crashPosition[1] + crashedScenarioCameraHeight;
