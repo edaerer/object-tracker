@@ -6,9 +6,6 @@
 #include "skybox.h"
 #include "textShowing.h"
 
-#define DARKNET_INCLUDE_ORIGINAL_API
-#include "darknet.h"
-
 #define STB_IMAGE_WRITE_IMPLEMENTATION
 #include "stb_image_write.h"
 
@@ -18,19 +15,32 @@
 #include <stdbool.h>
 #include <math.h>
 
+#include "onnx.h"
+
+/* ONNX detector */
+static OnnxDetector g_detector;
+static int          g_detector_ready = 0;
+
+/* Model yolu (hardcode veya ileride argümanlaştırabilirsin) */
+#define DETECTION_MODEL_PATH "model_int8.onnx"
+
+/* Ekrandan okunan frame’i tutmak için yeniden kullanılabilir tamponlar */
+static unsigned char *g_rgba_buffer = NULL;
+static unsigned char *g_rgb_buffer  = NULL;
+static size_t         g_frame_buf_capacity = 0;
+
+/* İsteğe bağlı: detection fps ölçümü */
+static double g_last_det_ms = 0.0;
+
 #define KEYBOARD_ENABLED 1
 
 /* 1 = use monitor vsync pacing (glfwSwapInterval(1))
  * 0 = no vsync (glfwSwapInterval(0)) and you may enable TARGET_FPS below */
-#define USE_VSYNC 1
+#define USE_VSYNC 0
 
 /* Manual frame cap (Hz) used only if USE_VSYNC == 0 and > 0.0
  * Set to 0.0 for uncapped (not recommended) */
-#define TARGET_FPS 0.0
-
-/* Throttle object detection (YOLO) – seconds between runs
- * Example: 0.10 = every 100 ms (~10 Hz) */
-#define DETECTION_INTERVAL 0.1
+#define TARGET_FPS 300.0
 
 /* Clamp for a single frame delta (to avoid spiral of death after stalls) */
 #define MAX_FRAME_DELTA 0.25
@@ -89,9 +99,8 @@ bool  isTriangleViewMode = false;
 static int   screenshot_index      = 0;
 static GLuint box_vbo              = 0;
 static GLuint box_shader_program   = 0;
-static network *g_net              = NULL;
 static int   g_classes             = 0;
-static float g_thresh              = 0.25f;
+static float g_thresh              = 0.6f;
 static float g_nms                 = 0.45f;
 
 static double last_detection_time  = 0.0;
@@ -100,7 +109,6 @@ void INIT_SYSTEM();
 void DRAW_SYSTEM();
 void update_camera_and_view_matrix(mat4 view);
 void project_point(const vec3 world, const mat4 view, const mat4 proj, int screen_w, int screen_h, float *out_x, float *out_y);
-void init_darknet(const char *cfg, const char *weights);
 void init_box_drawing();
 void drawBoundingBox(int left, int top, int right, int bottom);
 void detect_planes();
@@ -195,19 +203,10 @@ static double get_current_time_seconds() {
     return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
 }
 
-static image make_image_from_gl_rgb(const unsigned char *rgb, int w, int h, int flip_y){
-    image im = make_image(w, h, 4); /* CHW */
-    for (int y = 0; y < h; ++y) {
-        int src_y = flip_y ? (h - 1 - y) : y;
-        const unsigned char *row = rgb + (size_t)src_y * w * 4;
-        for (int x = 0; x < w; ++x) {
-            int idx = x * 4;
-            im.data[0 * w * h + y * w + x] = row[idx + 0] / 255.0f;
-            im.data[1 * w * h + y * w + x] = row[idx + 1] / 255.0f;
-            im.data[2 * w * h + y * w + x] = row[idx + 2] / 255.0f;
-        }
-    }
-    return im;
+static double get_current_time_millis() {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (double)now.tv_sec * 1000 + (double)now.tv_nsec / 1000000.0;
 }
 
 static void build_plane_model_matrix(const Plane *p, mat4 model) {
@@ -261,7 +260,7 @@ int main() {
 
     INIT_SYSTEM();
     init_box_drawing();
-    init_darknet("yolov4-tiny.cfg", "yolov4-tiny-best.weights");
+    init_onnx_model();
 
     g_last_time   = get_current_time_seconds();
     g_start_time  = g_last_time;
@@ -293,11 +292,7 @@ int main() {
         DRAW_SYSTEM();
 
         /* 5. Throttled detection (expensive glReadPixels) */
-        double detect_now = now;
-        if (detect_now - last_detection_time >= DETECTION_INTERVAL) {
-            detect_planes();
-            last_detection_time = detect_now;
-        }
+        detect_planes();
 
         /* 6. Present & events */
         glfwSwapBuffers(window);
@@ -448,15 +443,6 @@ void project_point(const vec3 world, const mat4 view, const mat4 proj, int scree
     *out_y = (clip[1] * 0.5f + 0.5f) * screen_h;
 }
 
-void init_darknet(const char *cfg, const char *weights) {
-    g_net = load_network((char*)cfg, (char*)weights, 0);
-    set_batch_network(g_net, 1);
-    fuse_conv_batchnorm(*g_net);
-
-    layer l = g_net->layers[g_net->n - 1];
-    g_classes = l.classes;
-}
-
 void init_box_drawing() {
     const char *vertex_shader =
         "attribute vec2 position;\n"
@@ -477,6 +463,19 @@ void init_box_drawing() {
     glBindBuffer(GL_ARRAY_BUFFER, box_vbo);
     glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
+}
+
+void init_onnx_model() {
+    OnnxConfig cfg = onnx_default_config();
+    cfg.verbose       = 1;
+    cfg.score_thresh  = g_thresh;  /* global threshold’un varsa kullan */
+    cfg.nms_iou_thresh= g_nms;
+    if (onnx_load_model(&g_detector, DETECTION_MODEL_PATH, &cfg) == ONNX_OK) {
+        g_detector_ready = 1;
+        printf("[ONNX] Model yüklendi: %s\n", DETECTION_MODEL_PATH);
+    } else {
+        fprintf(stderr, "[ONNX] Model yükleme başarısız (%s)\n", DETECTION_MODEL_PATH);
+    }
 }
 
 void drawBoundingBox(int left, int top, int right, int bottom) {
@@ -504,97 +503,94 @@ void drawBoundingBox(int left, int top, int right, int bottom) {
     glVertexAttribPointer(position_attr, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
 
     glDrawArrays(GL_LINE_LOOP, 0, 4);
+    glLineWidth(3);
 
     glDisableVertexAttribArray(position_attr);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
 void detect_planes(void) {
-    if (!g_net) {
-        fprintf(stderr, "Darknet network not loaded.\n");
+    if (!g_detector_ready)
+        return;
+
+    /* Ekran boyutu (varsayılan tam pencere) */
+    const int W = SCR_WIDTH;
+    const int H = SCR_HEIGHT;
+
+    /* glReadPixels pahalıdır; istersen önce daha küçük bir FBO’da render veya
+       aşağı ölçek için glBlitFramebuffer kullanabilirsin. Şimdilik tam boy. */
+
+    size_t need_rgba = (size_t)W * H * 4;
+    size_t need_rgb  = (size_t)W * H * 3;
+
+    if (need_rgba > g_frame_buf_capacity) {
+        unsigned char *new_rgba = (unsigned char*)realloc(g_rgba_buffer, need_rgba);
+        unsigned char *new_rgb  = (unsigned char*)realloc(g_rgb_buffer,  need_rgb);
+        if (!new_rgba || !new_rgb) {
+            fprintf(stderr, "[ONNX] Frame buffer realloc hatası\n");
+            free(new_rgba); free(new_rgb);
+            return;
+        }
+        g_rgba_buffer = new_rgba;
+        g_rgb_buffer  = new_rgb;
+        g_frame_buf_capacity = need_rgba; /* kapasiteyi RGBA boyutu ile takip */
+    }
+
+    /* OpenGL’den piksel okuma (çıktı alt-origin; vertical flip gerek) */
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, g_rgba_buffer);
+
+    /* RGBA -> RGB + vertical flip (model üstten alta bekliyor) */
+    for (int y = 0; y < H; ++y) {
+        int src_y = H - 1 - y; /* flip */
+        const unsigned char *src_row = g_rgba_buffer + (size_t)src_y * W * 4;
+        unsigned char *dst_row       = g_rgb_buffer  + (size_t)y     * W * 3;
+        for (int x = 0; x < W; ++x) {
+            const unsigned char *sp = src_row + (size_t)x * 4;
+            unsigned char *dp       = dst_row + (size_t)x * 3;
+            dp[0] = sp[0]; /* R */
+            dp[1] = sp[1]; /* G */
+            dp[2] = sp[2]; /* B */
+        }
+    }
+
+    OnnxDet *dets = NULL;
+    int det_count = 0;
+
+    double t0 = get_current_time_seconds();
+    int rc = onnx_predict(&g_detector, g_rgb_buffer, W, H, &dets, &det_count);
+    double t1 = get_current_time_seconds();
+
+    g_last_det_ms = (t1 - t0) * 1000.0;
+
+    if (rc != ONNX_OK) {
+        fprintf(stderr, "[ONNX] predict hata kodu=%d\n", rc);
         return;
     }
 
-    int fbw, fbh;
-    glfwGetFramebufferSize(window, &fbw, &fbh);
+    /* Kutuları çizmeden önce derinlik testini kapat ki overlay olsun */
 
-    /* --- Static reusable pixel buffer to avoid malloc every call --- */
-    static unsigned char *pixel_buffer = NULL;
-    static size_t pixel_capacity = 0;
-    size_t need = (size_t)fbw * (size_t)fbh * 4;
-    if (need > pixel_capacity) {
-        unsigned char *tmp = realloc(pixel_buffer, need);
-        if (!tmp) {
-            fprintf(stderr, "Failed to allocate %zu bytes for pixel buffer\n", need);
-            return;
-        }
-        pixel_buffer = tmp;
-        pixel_capacity = need;
+    for (int i = 0; i < det_count; ++i) {
+        /* İstersen sınıf bazlı renk seçimi yapabilirsin; şimdilik aynı */
+        int left   = (int)floorf(dets[i].x1);
+        int top    = (int)floorf(dets[i].y1);
+        int right  = (int)ceilf (dets[i].x2);
+        int bottom = (int)ceilf (dets[i].y2);
+
+        /* Ekran sınırına clamp (güvenlik) */
+        if (left   < 0)       left   = 0;
+        if (top    < 0)       top    = 0;
+        if (right  >= W)      right  = W - 1;
+        if (bottom >= H)      bottom = H - 1;
+        if (right <= left || bottom <= top)
+            continue;
+
+        drawBoundingBox(left, top, right, bottom);
     }
 
-    glPixelStorei(GL_PACK_ALIGNMENT, 1);
-    /* glFlush() not needed; glReadPixels will sync as required */
-    glReadPixels(0, 0, fbw, fbh, GL_RGBA, GL_UNSIGNED_BYTE, pixel_buffer);
+    /* İstersen OSD’ye son inference süresini yaz: update_status_text("DET ms: ...", ...); */
 
-    /* Build Darknet image (CHW, normalized) */
-    image im = make_image_from_gl_rgb(pixel_buffer, fbw, fbh, 1);
-
-    int netw = g_net->w;
-    int neth = g_net->h;
-
-    /* Letterbox to network dims (alloc each call; can optimize later) */
-    image sized = letterbox_image(im, netw, neth);
-
-    network_predict(*g_net, sized.data);
-
-    int nboxes = 0;
-
-    /* IMPORTANT:
-       Pass letter=1 so Darknet internally accounts for letterbox padding
-       OR pass letter=0 and call correct_yolo_boxes manually.
-       Here we pass letter=1.
-       Signature: get_network_boxes(net, orig_w, orig_h, thresh, hier, map, relative, &nboxes, letter)
-    */
-    detection *dets = get_network_boxes(g_net, im.w, im.h, g_thresh, 0.5f, 0, 1, &nboxes, 1);
-
-    if (dets && nboxes > 0) {
-        do_nms_sort(dets, nboxes, g_net->layers[g_net->n - 1].classes, g_nms);
-    }
-
-    for (int i = 0; i < nboxes; i++) {
-        for (int c = 0; c < g_net->layers[g_net->n - 1].classes; c++) {
-            float p = dets[i].prob ? dets[i].prob[c] : 0.0f;
-            if (p > 0.25f) {
-                box bbox = dets[i].bbox;
-
-                /* bbox.* are still normalized (0–1) (because relative=1).
-                   Convert to pixel coordinates of ORIGINAL framebuffer size (im.w, im.h). */
-                float bx = bbox.x;
-                float by = bbox.y;
-                float bw = bbox.w;
-                float bh = bbox.h;
-
-                int left   = (int)((bx - bw / 2.0f) * im.w);
-                int right  = (int)((bx + bw / 2.0f) * im.w);
-                int top    = (int)((by - bh / 2.0f) * im.h);
-                int bottom = (int)((by + bh / 2.0f) * im.h);
-
-                if (left < 0) left = 0;
-                if (right > im.w) right = im.w;
-                if (top < 0) top = 0;
-                if (bottom > im.h) bottom = im.h;
-
-                if (right - left > 1 && bottom - top > 1) {
-                    /* Draw in screen pixel space */
-                    drawBoundingBox(left, top, right, bottom);
-                }
-            }
-        }
-    }
-
-    if (dets) free_detections(dets, nboxes);
-    free_image(sized);
-    free_image(im);
+    onnx_free_detections(dets);
 }
 
 void processInput() {
@@ -815,4 +811,12 @@ void CLEANUP_SYSTEM() {
 
     if (box_vbo)            glDeleteBuffers(1, &box_vbo);
     if (box_shader_program) glDeleteProgram(box_shader_program);
+
+    if (g_detector_ready) {
+        onnx_destroy(&g_detector);
+        g_detector_ready = 0;
+    }
+    free(g_rgba_buffer); g_rgba_buffer = NULL;
+    free(g_rgb_buffer);  g_rgb_buffer  = NULL;
+    g_frame_buf_capacity = 0;
 }

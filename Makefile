@@ -6,7 +6,7 @@ BIN_DIR   := bin
 CC := gcc
 
 CFLAGS  := -std=c99 -I$(INC_DIR) -w
-LIBS    := -Llib -lGL -lglfw -lm -L./lib -l:libdarknet.so -Wl,-rpath=./lib
+LIBS    := -Llib -lGL -lglfw -lm -L./lib -l:libdarknet.so -lonnxruntime -Wl,-rpath=./lib
 
 SOURCES := $(wildcard $(SRC_DIR)/*.c)
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
