@@ -1,17 +1,4 @@
 #define _POSIX_C_SOURCE 200809L
-/* =============================================================
- *  Flight / Terrain Demo - Refactored main.c
- *  Key changes vs original:
- *    - Frame timing & deltaTime computed once per loop (at top)
- *    - All simulation & game logic moved into update_system()
- *    - DRAW_SYSTEM() now ONLY renders (no timing logic)
- *    - detect_planes() throttled (configurable)
- *    - Optional manual frame cap when VSync disabled
- *    - Cleaner FPS calculation (every 0.25 s)
- *
- *  Tunables (see CONFIGURATION section below)
- * ============================================================= */
-
 #include "globals.h"
 #include "heightMap.h"
 #include "minimap.h"
@@ -31,9 +18,6 @@
 #include <stdbool.h>
 #include <math.h>
 
-/* =============================================================
- * CONFIGURATION
- * ============================================================= */
 #define KEYBOARD_ENABLED 1
 
 /* 1 = use monitor vsync pacing (glfwSwapInterval(1))
@@ -46,14 +30,11 @@
 
 /* Throttle object detection (YOLO) – seconds between runs
  * Example: 0.10 = every 100 ms (~10 Hz) */
-#define DETECTION_INTERVAL 0.10
+#define DETECTION_INTERVAL 0.1
 
 /* Clamp for a single frame delta (to avoid spiral of death after stalls) */
 #define MAX_FRAME_DELTA 0.25
 
-/* =============================================================
- * GLOBAL STATE (original + required)
- * ============================================================= */
 GLFWwindow *window;
 const int SCR_WIDTH  = 1920;
 const int SCR_HEIGHT = 1080;
@@ -86,10 +67,8 @@ float autoLevelSpeed           = 1.0f;
 float verticalSpeed            = 0.0f;
 static float lastAltitude      = 0.0f;
 
-/* REFACTORED: global deltaTime is now set once per frame in main loop */
 float deltaTime = 0.0f;
 
-/* Timing accumulators */
 static double g_start_time     = 0.0;
 static double g_last_time      = 0.0;
 static double fps_accum        = 0.0;
@@ -117,34 +96,105 @@ static float g_nms                 = 0.45f;
 
 static double last_detection_time  = 0.0;
 
-/* Forward declarations (some from original) */
 void INIT_SYSTEM();
-void DRAW_SYSTEM(); /* rendering only now */
-void CLEANUP_SYSTEM();
+void DRAW_SYSTEM();
 void update_camera_and_view_matrix(mat4 view);
-void processInput(); /* still uses global deltaTime for now */
-void framebuffer_size_callback(GLFWwindow *window, int width, int height);
-void whereItCrashed();
-void detect_planes();
+void project_point(const vec3 world, const mat4 view, const mat4 proj, int screen_w, int screen_h, float *out_x, float *out_y);
 void init_darknet(const char *cfg, const char *weights);
 void init_box_drawing();
-GLuint createShaderProgram(const char *vsSource, const char *fsSource);
+void drawBoundingBox(int left, int top, int right, int bottom);
+void detect_planes();
+void processInput();
+void whereItCrashed();
+void framebuffer_size_callback(GLFWwindow *window, int width, int height);
+void CLEANUP_SYSTEM();
 
-/* =============================================================
- * NEW: Central per-frame simulation function
- * ============================================================= */
-static void update_system(double dt);
+static void update_system(double dt) {
+    double elapsedTime = g_last_time - g_start_time;
 
-/* =============================================================
- * Utilities
- * ============================================================= */
+    /* Plane movement (player) – was in DRAW_SYSTEM before */
+    if (!isCrashed && automaticCameraMovement) {
+        vec3 move_vector;
+        glm_vec3_scale(planes[0].front, currentMovementSpeed * (float)dt, move_vector);
+        glm_vec3_add(planes[0].position, move_vector, planes[0].position);
+        planes[0].position[1] -= gravitySpeed * (float)dt;
+    }
+
+    /* Enemy planes */
+    for (int i = 1; i < MAX_PLANES; i++) {
+        update_enemy_plane(&planes[i]); /* could pass dt if you refactor */
+    }
+
+    /* Vertical speed & altitude tracking */
+    if (!isCrashed) {
+        if (dt > 0.0) {
+            verticalSpeed = (planes[0].position[1] - lastAltitude) / (float)dt;
+        }
+        lastAltitude = planes[0].position[1];
+    }
+
+    /* Crash detection & OSD updates */
+    if (!isCrashed) {
+        float groundHeight      = get_terrain_height(planes[0].position[0], planes[0].position[2]);
+        float heightAboveGround = planes[0].position[1] - groundHeight;
+
+        if (heightAboveGround < 0.5f) {
+            isCrashed = true;
+            hasSetCrashView = false;
+            glm_vec3_copy(planes[0].position, crashPosition);
+            crashPosition[1] = groundHeight;
+        }
+
+        /* Roll calculation */
+        vec3 worldUp = {0.0f, 1.0f, 0.0f};
+        vec3 cross_product;
+        glm_vec3_cross(worldUp, planes[0].up, cross_product);
+        float roll_rad = acosf(glm_vec3_dot(worldUp, planes[0].up));
+        if (glm_vec3_dot(cross_product, planes[0].front) < 0)
+            roll_rad = -roll_rad;
+
+        vec3 velocity;
+        glm_vec3_scale(planes[0].front, currentMovementSpeed, velocity);
+        float hSpeed = sqrtf(velocity[0]*velocity[0] + velocity[2]*velocity[2]);
+        float vSpeed = velocity[1];
+
+        update_osd_texts(currentMovementSpeed, isSpeedFixed,
+                         planes[0].position[1], heightAboveGround,
+                         glm_deg(roll_rad), glm_deg(asinf(planes[0].front[1])),
+                         hSpeed, vSpeed, elapsedTime);
+
+        if (heightAboveGround < 30.0f) {
+            update_status_text("WARNING: PULL UP", 1.0f, 0.0f, 0.0f);
+        } else if (isAutopilotOn) {
+            update_status_text("AUTOPILOT ENGAGED", 0.0f, 1.0f, 0.0f);
+        } else {
+            update_status_text("FLIGHT STATUS: SAFE", 0.0f, 1.0f, 1.0f);
+        }
+    } else {
+        if (!hasSetCrashView) {
+            whereItCrashed();
+            hasSetCrashView = true;
+        }
+        update_crash_text();
+    }
+
+    /* FPS tracking (every 0.25 s) */
+    fps_accum  += dt;
+    fps_frames += 1;
+    if (fps_accum >= 0.25) {
+        float fps = (float)(fps_frames / fps_accum);
+        update_fps_text(fps);
+        fps_accum  = 0.0;
+        fps_frames = 0;
+    }
+}
+
 static double get_current_time_seconds() {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double)now.tv_sec + (double)now.tv_nsec / 1000000000.0;
 }
 
-/* Image conversion for detection */
 static image make_image_from_gl_rgb(const unsigned char *rgb, int w, int h, int flip_y){
     image im = make_image(w, h, 4); /* CHW */
     for (int y = 0; y < h; ++y) {
@@ -180,9 +230,6 @@ static int project_screen_from_clip(const vec4 clip, int sw, int sh, float *sx, 
     return 1;
 }
 
-/* =============================================================
- * MAIN
- * ============================================================= */
 int main() {
     if (!glfwInit()) {
         fprintf(stderr, "Failed to initialize GLFW\n");
@@ -279,9 +326,6 @@ int main() {
     return 0;
 }
 
-/* =============================================================
- * SYSTEM INITIALIZATION
- * ============================================================= */
 void INIT_SYSTEM() {
     printf("Initializing system...\n");
     for (int i = 0; i < MAX_PLANES; i++) {
@@ -306,92 +350,6 @@ void INIT_SYSTEM() {
     printf("Initialization successful.\n");
 }
 
-/* =============================================================
- * UPDATE (Simulation)
- * ============================================================= */
-static void update_system(double dt) {
-    double elapsedTime = g_last_time - g_start_time;
-
-    /* Plane movement (player) – was in DRAW_SYSTEM before */
-    if (!isCrashed && automaticCameraMovement) {
-        vec3 move_vector;
-        glm_vec3_scale(planes[0].front, currentMovementSpeed * (float)dt, move_vector);
-        glm_vec3_add(planes[0].position, move_vector, planes[0].position);
-        planes[0].position[1] -= gravitySpeed * (float)dt;
-    }
-
-    /* Enemy planes */
-    for (int i = 1; i < MAX_PLANES; i++) {
-        update_enemy_plane(&planes[i]); /* could pass dt if you refactor */
-    }
-
-    /* Vertical speed & altitude tracking */
-    if (!isCrashed) {
-        if (dt > 0.0) {
-            verticalSpeed = (planes[0].position[1] - lastAltitude) / (float)dt;
-        }
-        lastAltitude = planes[0].position[1];
-    }
-
-    /* Crash detection & OSD updates */
-    if (!isCrashed) {
-        float groundHeight      = get_terrain_height(planes[0].position[0], planes[0].position[2]);
-        float heightAboveGround = planes[0].position[1] - groundHeight;
-
-        if (heightAboveGround < 0.5f) {
-            isCrashed = true;
-            hasSetCrashView = false;
-            glm_vec3_copy(planes[0].position, crashPosition);
-            crashPosition[1] = groundHeight;
-        }
-
-        /* Roll calculation */
-        vec3 worldUp = {0.0f, 1.0f, 0.0f};
-        vec3 cross_product;
-        glm_vec3_cross(worldUp, planes[0].up, cross_product);
-        float roll_rad = acosf(glm_vec3_dot(worldUp, planes[0].up));
-        if (glm_vec3_dot(cross_product, planes[0].front) < 0)
-            roll_rad = -roll_rad;
-
-        vec3 velocity;
-        glm_vec3_scale(planes[0].front, currentMovementSpeed, velocity);
-        float hSpeed = sqrtf(velocity[0]*velocity[0] + velocity[2]*velocity[2]);
-        float vSpeed = velocity[1];
-
-        update_osd_texts(currentMovementSpeed, isSpeedFixed,
-                         planes[0].position[1], heightAboveGround,
-                         glm_deg(roll_rad), glm_deg(asinf(planes[0].front[1])),
-                         hSpeed, vSpeed, elapsedTime);
-
-        if (heightAboveGround < 30.0f) {
-            update_status_text("WARNING: PULL UP", 1.0f, 0.0f, 0.0f);
-        } else if (isAutopilotOn) {
-            update_status_text("AUTOPILOT ENGAGED", 0.0f, 1.0f, 0.0f);
-        } else {
-            update_status_text("FLIGHT STATUS: SAFE", 0.0f, 1.0f, 1.0f);
-        }
-    } else {
-        if (!hasSetCrashView) {
-            whereItCrashed();
-            hasSetCrashView = true;
-        }
-        update_crash_text();
-    }
-
-    /* FPS tracking (every 0.25 s) */
-    fps_accum  += dt;
-    fps_frames += 1;
-    if (fps_accum >= 0.25) {
-        float fps = (float)(fps_frames / fps_accum);
-        update_fps_text(fps);
-        fps_accum  = 0.0;
-        fps_frames = 0;
-    }
-}
-
-/* =============================================================
- * RENDERING (DRAW_SYSTEM simplified)
- * ============================================================= */
 void DRAW_SYSTEM() {
     glClearColor(0.53f, 0.81f, 0.92f, 1.0f);
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -436,9 +394,6 @@ void DRAW_SYSTEM() {
     glEnable(GL_DEPTH_TEST);
 }
 
-/* =============================================================
- * CAMERA
- * ============================================================= */
 void update_camera_and_view_matrix(mat4 view) {
     if (isCrashed) {
         vec3 center;
@@ -480,8 +435,7 @@ void update_camera_and_view_matrix(mat4 view) {
     glm_lookat(cameraPos, lookAtTarget, planes[0].up, view);
 }
 
-void project_point(const vec3 world, const mat4 view, const mat4 proj,
-                   int screen_w, int screen_h, float *out_x, float *out_y) {
+void project_point(const vec3 world, const mat4 view, const mat4 proj, int screen_w, int screen_h, float *out_x, float *out_y) {
     vec4 tmp = {world[0], world[1], world[2], 1.0f};
     vec4 clip;
     glm_mat4_mulv(view, tmp, tmp);
@@ -494,9 +448,6 @@ void project_point(const vec3 world, const mat4 view, const mat4 proj,
     *out_y = (clip[1] * 0.5f + 0.5f) * screen_h;
 }
 
-/* =============================================================
- * DARKNET / YOLO INIT
- * ============================================================= */
 void init_darknet(const char *cfg, const char *weights) {
     g_net = load_network((char*)cfg, (char*)weights, 0);
     set_batch_network(g_net, 1);
@@ -506,9 +457,6 @@ void init_darknet(const char *cfg, const char *weights) {
     g_classes = l.classes;
 }
 
-/* =============================================================
- * BOX RENDERING (2D overlay)
- * ============================================================= */
 void init_box_drawing() {
     const char *vertex_shader =
         "attribute vec2 position;\n"
@@ -561,9 +509,6 @@ void drawBoundingBox(int left, int top, int right, int bottom) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
-/* =============================================================
- * OBJECT DETECTION (Throttled)
- * ============================================================= */
 void detect_planes(void) {
     if (!g_net) {
         fprintf(stderr, "Darknet network not loaded.\n");
@@ -652,9 +597,6 @@ void detect_planes(void) {
     free_image(im);
 }
 
-/* =============================================================
- * INPUT HANDLING (unchanged except comments)
- * ============================================================= */
 void processInput() {
     if (!isCrashed) {
         if (glfwGetKey(window, GLFW_KEY_1)) { offset_behind = 400.0f; offset_above = 170.0f; offset_right = 0.0f; }
@@ -799,9 +741,6 @@ void processInput() {
     glm_normalize(planes[0].up);
 }
 
-/* =============================================================
- * CRASH CAMERA
- * ============================================================= */
 void whereItCrashed() {
     cameraPos[1] = crashPosition[1] + crashedScenarioCameraHeight;
     cameraPos[2] = crashPosition[2] + crashedScenarioCameraHeight;
@@ -815,17 +754,11 @@ void whereItCrashed() {
     glm_normalize(cameraUp);
 }
 
-/* =============================================================
- * FRAMEBUFFER RESIZE
- * ============================================================= */
 void framebuffer_size_callback(GLFWwindow *window, int width, int height) {
     (void)window;
     glViewport(0, 0, width, height);
 }
 
-/* =============================================================
- * SHADERS
- * ============================================================= */
 GLuint compileShader(const char *source, GLenum type) {
     GLuint shader = glCreateShader(type);
     glShaderSource(shader, 1, &source, NULL);
@@ -871,9 +804,6 @@ GLuint createShaderProgram(const char *vsSource, const char *fsSource) {
     return program;
 }
 
-/* =============================================================
- * CLEANUP
- * ============================================================= */
 void CLEANUP_SYSTEM() {
     cleanup_plane();
     cleanup_heightmap();
