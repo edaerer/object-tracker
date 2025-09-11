@@ -22,7 +22,7 @@ static OnnxDetector g_detector;
 static int          g_detector_ready = 0;
 
 /* Model yolu (hardcode veya ileride argümanlaştırabilirsin) */
-#define DETECTION_MODEL_PATH "model_int8.onnx"
+#define DETECTION_MODEL_PATH "model.onnx"
 
 /* Ekrandan okunan frame’i tutmak için yeniden kullanılabilir tamponlar */
 static unsigned char *g_rgba_buffer = NULL;
@@ -36,11 +36,11 @@ static double g_last_det_ms = 0.0;
 
 /* 1 = use monitor vsync pacing (glfwSwapInterval(1))
  * 0 = no vsync (glfwSwapInterval(0)) and you may enable TARGET_FPS below */
-#define USE_VSYNC 0
+#define USE_VSYNC 1
 
 /* Manual frame cap (Hz) used only if USE_VSYNC == 0 and > 0.0
  * Set to 0.0 for uncapped (not recommended) */
-#define TARGET_FPS 300.0
+#define TARGET_FPS 0.0
 
 /* Clamp for a single frame delta (to avoid spiral of death after stalls) */
 #define MAX_FRAME_DELTA 0.25
@@ -110,6 +110,7 @@ void DRAW_SYSTEM();
 void update_camera_and_view_matrix(mat4 view);
 void project_point(const vec3 world, const mat4 view, const mat4 proj, int screen_w, int screen_h, float *out_x, float *out_y);
 void init_box_drawing();
+void init_onnx_model();
 void drawBoundingBox(int left, int top, int right, int bottom);
 void detect_planes();
 void processInput();
@@ -468,7 +469,7 @@ void init_box_drawing() {
 void init_onnx_model() {
     OnnxConfig cfg = onnx_default_config();
     cfg.verbose       = 1;
-    cfg.score_thresh  = g_thresh;  /* global threshold’un varsa kullan */
+    cfg.score_thresh  = g_thresh;
     cfg.nms_iou_thresh= g_nms;
     if (onnx_load_model(&g_detector, DETECTION_MODEL_PATH, &cfg) == ONNX_OK) {
         g_detector_ready = 1;
@@ -509,16 +510,13 @@ void drawBoundingBox(int left, int top, int right, int bottom) {
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
 
+// ...existing code...
 void detect_planes(void) {
     if (!g_detector_ready)
         return;
 
-    /* Ekran boyutu (varsayılan tam pencere) */
     const int W = SCR_WIDTH;
     const int H = SCR_HEIGHT;
-
-    /* glReadPixels pahalıdır; istersen önce daha küçük bir FBO’da render veya
-       aşağı ölçek için glBlitFramebuffer kullanabilirsin. Şimdilik tam boy. */
 
     size_t need_rgba = (size_t)W * H * 4;
     size_t need_rgb  = (size_t)W * H * 3;
@@ -533,62 +531,75 @@ void detect_planes(void) {
         }
         g_rgba_buffer = new_rgba;
         g_rgb_buffer  = new_rgb;
-        g_frame_buf_capacity = need_rgba; /* kapasiteyi RGBA boyutu ile takip */
+        g_frame_buf_capacity = need_rgba;
     }
 
-    /* OpenGL’den piksel okuma (çıktı alt-origin; vertical flip gerek) */
+    double t0 = get_current_time_millis();
     glPixelStorei(GL_PACK_ALIGNMENT, 1);
     glReadPixels(0, 0, W, H, GL_RGBA, GL_UNSIGNED_BYTE, g_rgba_buffer);
+    double t1 = get_current_time_millis();
 
-    /* RGBA -> RGB + vertical flip (model üstten alta bekliyor) */
+    #pragma omp parallel for
     for (int y = 0; y < H; ++y) {
-        int src_y = H - 1 - y; /* flip */
+        int src_y = H - 1 - y; // flip
         const unsigned char *src_row = g_rgba_buffer + (size_t)src_y * W * 4;
         unsigned char *dst_row       = g_rgb_buffer  + (size_t)y     * W * 3;
-        for (int x = 0; x < W; ++x) {
+
+        int x = 0;
+#if defined(__SSE2__)
+        /* (Optional SIMD section could be implemented here) */
+#endif
+        for (; x < W; ++x) {
             const unsigned char *sp = src_row + (size_t)x * 4;
             unsigned char *dp       = dst_row + (size_t)x * 3;
-            dp[0] = sp[0]; /* R */
-            dp[1] = sp[1]; /* G */
-            dp[2] = sp[2]; /* B */
+            unsigned char gray = (unsigned char)(((uint16_t)sp[0] * 77 +
+                                                  (uint16_t)sp[1] * 150 +
+                                                  (uint16_t)sp[2] * 29) >> 8);
+            dp[0] = dp[1] = dp[2] = gray;
         }
     }
+    double t2 = get_current_time_millis();
 
     OnnxDet *dets = NULL;
     int det_count = 0;
 
-    double t0 = get_current_time_seconds();
+    double ta0 = get_current_time_millis();
     int rc = onnx_predict(&g_detector, g_rgb_buffer, W, H, &dets, &det_count);
-    double t1 = get_current_time_seconds();
-
-    g_last_det_ms = (t1 - t0) * 1000.0;
+    double ta1 = get_current_time_millis();
+    g_last_det_ms = (ta1 - ta0); /* already existing variable */
 
     if (rc != ONNX_OK) {
         fprintf(stderr, "[ONNX] predict hata kodu=%d\n", rc);
         return;
     }
 
-    /* Kutuları çizmeden önce derinlik testini kapat ki overlay olsun */
-
+    glDisable(GL_DEPTH_TEST);
     for (int i = 0; i < det_count; ++i) {
-        /* İstersen sınıf bazlı renk seçimi yapabilirsin; şimdilik aynı */
         int left   = (int)floorf(dets[i].x1);
         int top    = (int)floorf(dets[i].y1);
         int right  = (int)ceilf (dets[i].x2);
         int bottom = (int)ceilf (dets[i].y2);
 
-        /* Ekran sınırına clamp (güvenlik) */
-        if (left   < 0)       left   = 0;
-        if (top    < 0)       top    = 0;
-        if (right  >= W)      right  = W - 1;
-        if (bottom >= H)      bottom = H - 1;
+        if (left   < 0)  left   = 0;
+        if (top    < 0)  top    = 0;
+        if (right  >= W) right  = W - 1;
+        if (bottom >= H) bottom = H - 1;
         if (right <= left || bottom <= top)
             continue;
 
         drawBoundingBox(left, top, right, bottom);
     }
+    glEnable(GL_DEPTH_TEST);
 
-    /* İstersen OSD’ye son inference süresini yaz: update_status_text("DET ms: ...", ...); */
+    /* Minimal added timing print */
+    double t_end = get_current_time_millis();
+    printf("[DET] read=%.2fms convert=%.2fms infer=%.2fms total=%.2fms full=%.2fms boxes=%d\n",
+           (t1 - t0),          /* glReadPixels */
+           (t2 - t1),          /* conversion   */
+           g_last_det_ms,      /* inference    */
+           (ta1 - t0),         /* read+convert+infer */
+           (t_end - t0),       /* full function (includes box draw) */
+           det_count);
 
     onnx_free_detections(dets);
 }
