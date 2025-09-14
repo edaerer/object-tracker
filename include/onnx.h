@@ -1,114 +1,94 @@
 #ifndef ONNX_ABSTRACTION_H
 #define ONNX_ABSTRACTION_H
 
-/*
-  Basit ONNX Runtime C sarmalayıcısı
-  - Model yükleme
-  - Tek görüntü (RGB uint8 HWC) üzerinde ileri besleme (predict)
-  - Sınıf-bilinçli NMS
-  - Kaynakları serbest bırakma
-
-  Derleme Örneği (Linux):
-    gcc -std=c11 -O3 main.c onnx.c -o detect \
-        -I/path/to/onnxruntime/include -L/path/to/onnxruntime/lib -lonnxruntime -lm
-
-  Not:
-    - Görüntü verisi RGB 8-bit HWC varsayılıyor.
-    - Model giriş formatı NCHW float32 [1,3,H,W].
-    - Çıktı formatı [N, 4 + K] veya [1, N, 4 + K] (YOLO benzeri) varsayımı.
-    - Çıktı satırı: [x1,y1,x2,y2, score_class0, score_class1, ...].
-*/
-
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
-/* Tespit (Detection) yapısı */
+/*
+ * Minimal ONNX Runtime C wrapper API
+ *  - Model load/unload
+ *  - Inference with RGB8 (HWC) input sized w x h
+ *  - Post-processing returns pixel-space boxes & scores
+ */
+
+/* Forward-declare ONNX Runtime types so this header
+ * does not require including ORT headers at call sites. */
+typedef struct OrtApi OrtApi;
+typedef struct OrtEnv OrtEnv;
+typedef struct OrtSessionOptions OrtSessionOptions;
+typedef struct OrtSession OrtSession;
+typedef struct OrtAllocator OrtAllocator;
+typedef struct OrtMemoryInfo OrtMemoryInfo;
+typedef struct OrtValue OrtValue;
+typedef struct OrtStatus OrtStatus;
+typedef struct OrtTensorTypeAndShapeInfo OrtTensorTypeAndShapeInfo;
+
+/* Public detection result */
 typedef struct {
-    float x1, y1, x2, y2;  /* Piksel cinsinden (predict döndüğünde orijinal görüntü ölçeğine dönüştürülmüş) */
-    float score;           /* Seçilen sınıfın skoru */
-    int   cls;             /* Sınıf indeksi */
+    float x1, y1, x2, y2;  /* pixel coords */
+    float score;           /* confidence */
+    int   cls;             /* class id */
 } OnnxDet;
 
-/* Hata kodları */
-enum {
-    ONNX_OK = 0,
-    ONNX_ERR_GENERAL = -1,
-    ONNX_ERR_MODEL = -2,
-    ONNX_ERR_MEMORY = -3,
-    ONNX_ERR_RUNTIME = -4,
-    ONNX_ERR_INVALID_ARG = -5
-};
-
-/* Konfigürasyon */
+/* Config */
 typedef struct {
-    int intra_threads;    /* Varsayılan 8 */
-    int inter_threads;    /* Varsayılan 1 */
-    float score_thresh;   /* Varsayılan 0.30f */
-    float nms_iou_thresh; /* Varsayılan 0.45f */
-    int   verbose;        /* >0 ise bazı loglar yazar */
+    int   intra_threads;     /* intra-op threads */
+    int   inter_threads;     /* inter-op threads */
+    float score_thresh;      /* pre-NMS score threshold */
+    float nms_iou_thresh;    /* NMS IoU threshold */
+    int   verbose;           /* 0/1 logging */
 } OnnxConfig;
 
-/* İçsel durum (kullanıcı doğrudan alanları kullanmamalı) */
+/* Status codes */
+typedef enum {
+    ONNX_OK = 0,
+    ONNX_ERR_INVALID_ARG = -1,
+    ONNX_ERR_MODEL       = -2,
+    ONNX_ERR_MEMORY      = -3,
+    ONNX_ERR_RUNTIME     = -4
+} OnnxStatus;
+
+/* Detector instance */
 typedef struct {
-    /* ONNX Runtime ham pointerları */
-    const struct OrtApi* api;
-    struct OrtEnv* env;
-    struct OrtSessionOptions* session_opts;
-    struct OrtSession* session;
-    struct OrtMemoryInfo* mem_info;
-    struct OrtAllocator* allocator;
+    const OrtApi* api;             /* ORT API table */
+    OrtEnv*            env;
+    OrtSessionOptions* session_opts;
+    OrtSession*        session;
+    OrtAllocator*      allocator;
+    OrtMemoryInfo*     mem_info;
 
-    /* Model giriş/çıkış adları (tek giriş, tek ana çıktı varsayımı) */
-    char* input_name;
-    char* output_name;
+    char* input_name;              /* owned by ORT allocator */
+    char* output_name;             /* owned by ORT allocator */
 
-    /* Giriş boyutları */
-    int64_t in_n;
-    int64_t in_c;
-    int64_t in_h;
-    int64_t in_w;
+    int64_t in_n, in_c, in_h, in_w; /* expected input NCHW */
 
-    /* Konfigürasyon */
-    OnnxConfig cfg;
+    OnnxConfig cfg;                /* runtime config */
 } OnnxDetector;
 
-/* Varsayılan konfigürasyon döndürür */
+/* Defaults */
 OnnxConfig onnx_default_config(void);
 
-/* Yükleme:
-   - detector: sıfırlanmış (memset 0) bir yapı
-   - model_path: .onnx dosya yolu
-   - cfg: NULL ise default uygulanır
-   Dönüş: 0 (başarılı) veya negatif hata kodu
-*/
+/* Load model from path */
 int onnx_load_model(OnnxDetector* detector, const char* model_path, const OnnxConfig* cfg);
 
-/* Tek görüntü üzerinde tahmin:
-   - img_rgb: H x W x 3, uint8 RGB
-   - w,h: giriş görüntü boyutu
-   - out_dets: çıktı tespit dizisi pointer'ı (malloc ile ayrılır) -> kullanıcı onnx_free_detections ile serbest bırakır
-   - out_count: tespit sayısı
-   Dönüş: 0 veya hata kodu
-*/
+/* Inference on RGB8 HWC image of size w x h */
 int onnx_predict(const OnnxDetector* detector,
                  const uint8_t* img_rgb, int w, int h,
                  OnnxDet** out_dets, int* out_count);
 
-/* Kaynakları serbest bırak */
+/* Cleanup */
 void onnx_destroy(OnnxDetector* detector);
-
-/* Tespit dizisini serbest bırak */
 void onnx_free_detections(OnnxDet* dets);
 
-/* Versiyon bilgisini (derleme zamanı ORT_API_VERSION makrosu + runtime yoklamadan) yazı olarak döndürür.
-   NOT: Statik string döndürür, free yapmayın. */
+/* Build/runtime ORT version string (static) */
 const char* onnx_runtime_version_string(void);
 
 #ifdef __cplusplus
-}
+} /* extern "C" */
 #endif
 
 #endif /* ONNX_ABSTRACTION_H */

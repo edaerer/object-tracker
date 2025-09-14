@@ -1,7 +1,7 @@
 SRC_DIR   := src
 INC_DIR   := include
 BUILD_DIR := build
-BIN_DIR   := bin
+BIN_DIR   := ./
 
 CC := gcc
 

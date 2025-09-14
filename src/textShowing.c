@@ -27,7 +27,7 @@ bool init_ui()
 void init_osd()
 {
     stbi_set_flip_vertically_on_load(false);
-    init_text_rendering("../include/text/freemono.png", "../include/text/freemono.meta", SCR_WIDTH, SCR_HEIGHT);
+    init_text_rendering("./images/freemono.png", "./images/freemono.meta", SCR_WIDTH, SCR_HEIGHT);
     stbi_set_flip_vertically_on_load(true);
     float size = 25.0f;
     float r = 0.0f, g = 0.0f, b = 1.0f, a = 1.0f;
