@@ -44,8 +44,8 @@ const float accelerationSlowing  = (accelerationSpeeding / speedingSlowingRatio)
 const float speedBoostMultiplier = 12.5f;
 
 float currentMovementSpeed;
-float initialMovementSpeed      = 100.0f;
-float initalAutoPilotModeSpeed  = 100.0f;
+float initialMovementSpeed      = 300.0f;
+float initalAutoPilotModeSpeed  = 650.0f;
 bool  startingAutoPilotMode     = true;
 
 float fov               = 45.0f;
@@ -83,7 +83,7 @@ static GLuint box_shader_program = 0;
 #define DETECTION_MODEL_PATH "./models/model.onnx"
 static OnnxDetector g_detector;
 static int          g_detector_ready = 0;
-static float        g_thresh = 0.4f;
+static float        g_thresh = 0.6f;
 static float        g_nms    = 0.45f;
 static double       g_last_det_ms = 0.0;
 
@@ -414,7 +414,7 @@ int main(void) {
             processInput();
         } else {
             if (startingAutoPilotMode) {
-                currentMovementSpeed = 300.0f;
+                currentMovementSpeed = 650.0f;
                 startingAutoPilotMode = false;
             }
             autoPilotMode();

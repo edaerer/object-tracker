@@ -109,13 +109,13 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 600.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = false,
+                    .useTexture = true,
                     .overrideColor = {0.58f, 0.776f, 0.941f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.0f},
@@ -123,13 +123,13 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 600.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = false,
+                    .useTexture = true,
                     .overrideColor = {0.737f, 0.8f, 0.851f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.0f},
@@ -137,7 +137,7 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 600.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
@@ -151,28 +151,28 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 700.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = true,
-                    .overrideColor = {1.0f, 1.0f, 1.0f},
+                    .useTexture = false,
+                    .overrideColor = {0.58f, 0.776f, 0.941f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.6f},
                    {.position = {500.0f, 500.0f, -3000.0f},
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 700.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = true,
-                    .overrideColor = {1.0f, 1.0f, 1.0f},
+                    .useTexture = false,
+                    .overrideColor = {0.737f, 0.8f, 0.851f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.6f}
 };
@@ -186,10 +186,10 @@ static AutopilotCommand flight_plan[] = {
     {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {TURN_RIGHT, 2.0f, 0.0f},
     {FLY_STRAIGHT, 1.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {FLY_STRAIGHT, 1.0f, 0.0f},
     {FLY_STRAIGHT, 6.0f, 0.0f},     {AUTO_PITCH_UP, 1.0f, 0.0f},    {FLY_STRAIGHT, 1.0f, 0.0f},
-    {TOGGLE_GRID_VIEW, 0.0f, 0.0f}, {FLY_STRAIGHT, 2.0f, 0.0f},     {SET_CAMERA, 0.0f, 2.0f},
+    {FLY_STRAIGHT, 2.0f, 0.0f},     {SET_CAMERA, 0.0f, 2.0f},
     {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {AUTO_PITCH_DOWN, 1.0f, 0.0f},
     {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 8.0f},       {FLY_STRAIGHT, 2.0f, 0.0f},
-    {TOGGLE_GRID_VIEW, 0.0f, 0.0f}, {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 7.0f},
+    {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 7.0f},
     {FLY_STRAIGHT, 1.0f, 0.0f},     {TOGGLE_SPEED_LOCK, 0.0f, 0.0f}
 };
 static const int numCommands = (int)(sizeof(flight_plan) / sizeof(AutopilotCommand));
@@ -585,11 +585,6 @@ void autoPilotMode(void) {
             if (commandTimer < deltaTime * 1.5f) {
                 isSpeedFixed = !isSpeedFixed;
                 if (isSpeedFixed) fixedValue = currentMovementSpeed;
-            }
-            break;
-        case TOGGLE_GRID_VIEW:
-            if (commandTimer < deltaTime * 1.5f) {
-                isTriangleViewMode = !isTriangleViewMode;
             }
             break;
         case FLY_STRAIGHT:
