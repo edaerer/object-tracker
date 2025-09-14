@@ -1,17 +1,20 @@
 #include "plane.h"
 #include "globals.h"
 #include "heightMap.h"
-#include "models/plane_yavuzselim.h"
+#include "stb_image.h"
 
-#define IMAGE_HEIGHT PLANE_YAVUZSELIM_HEIGHT
-#define IMAGE_WIDTH PLANE_YAVUZSELIM_WIDTH
-#define IMAGE_CHANNELS 4
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <math.h>
+#include <stdbool.h>
+#include <string.h>
+
 
 typedef enum {
     FLY_STRAIGHT,
     TURN_LEFT,
     TURN_RIGHT,
-
     AUTO_PITCH_UP,
     AUTO_PITCH_DOWN,
     SET_SPEED,
@@ -28,20 +31,64 @@ typedef struct {
 } AutopilotCommand;
 
 static const float MAX_PITCH_ANGLE_DEGREES = 135.0f;
-static const float PITCH_SMOOTHING_RANGE = 30.0f;
-static GLuint shaderProgram;
-static GLuint VBO, NBO, TBO;
-static GLuint planeTextureID;
-static GLsizei planeDrawCount;
-static tinyobj_attrib_t planeAttrib;
-static tinyobj_shape_t *planeShapes = NULL;
-static size_t numPlaneShapes;
+static const float PITCH_SMOOTHING_RANGE   = 30.0f;
+
+static GLuint shaderProgram = 0;
+static GLuint VBO = 0, NBO = 0, TBO = 0;
+static GLuint planeTextureID = 0;
+static GLsizei planeDrawCount = 0;
+
+static tinyobj_attrib_t    planeAttrib;
+static tinyobj_shape_t    *planeShapes = NULL;
+static size_t              numPlaneShapes = 0;
 static tinyobj_material_t *planeMaterials = NULL;
-static size_t numPlaneMaterials;
-static int currentCommandIndex = 0;
-static float commandTimer = 0.0f;
+static size_t              numPlaneMaterials = 0;
+
+static int   accelerationSpeeding = 2.0f;
+static int   currentCommandIndex  = 0;
+static float commandTimer         = 0.0f;
+
 static const float minimumHeightFromTheGroundAutoPilot = 250.0f;
 static const float maximumHeightFromTheGroundAutoPilot = 1500.0f;
+
+// Preprocess OBJ to strip vertex colors on 'v ' lines (Blender can export v x y z r g b)
+// tinyobj_loader_c doesn't accept extra RGB; keep only first 3 floats.
+static char* preprocess_obj_strip_vertex_colors(const char* input, size_t in_len, size_t* out_len) {
+    if (!input || in_len == 0) { *out_len = 0; return NULL; }
+    char* out = (char*)malloc(in_len + 1);
+    if (!out) { *out_len = 0; return NULL; }
+    size_t o = 0;
+    const char* p = input;
+    const char* end = input + in_len;
+    while (p < end) {
+        const char* nl = memchr(p, '\n', (size_t)(end - p));
+        size_t linelen = nl ? (size_t)(nl - p) : (size_t)(end - p);
+        if (linelen >= 2 && p[0] == 'v' && p[1] == ' ') {
+            float x,y,z;
+            // Parse first three floats; ignore the rest of the line
+            if (sscanf(p + 2, "%f %f %f", &x, &y, &z) == 3) {
+                int n = snprintf(out + o, (in_len - o), "v %.6f %.6f %.6f\n", x, y, z);
+                if (n < 0) { free(out); *out_len = 0; return NULL; }
+                o += (size_t)n;
+            } else {
+                // Fallback: copy as-is
+                memcpy(out + o, p, linelen);
+                o += linelen;
+                out[o++] = '\n';
+            }
+        } else {
+            // Copy the line as-is (plus newline if present)
+            memcpy(out + o, p, linelen);
+            o += linelen;
+            if (nl) out[o++] = '\n';
+        }
+        p = nl ? (nl + 1) : end;
+    }
+    out[o] = '\0';
+    *out_len = o;
+    return out;
+}
+
 
 Plane planes[MAX_PLANES] = {
                    {.position = {0.0f, 500.0f, 50.0f},
@@ -62,13 +109,13 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 300.0f,
+                    .speed = 600.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = false,
+                    .useTexture = true,
                     .overrideColor = {0.58f, 0.776f, 0.941f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.0f},
@@ -76,13 +123,13 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 300.0f,
+                    .speed = 600.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = false,
+                    .useTexture = true,
                     .overrideColor = {0.737f, 0.8f, 0.851f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.0f},
@@ -90,7 +137,7 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 300.0f,
+                    .speed = 600.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
@@ -104,188 +151,201 @@ Plane planes[MAX_PLANES] = {
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 700.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = true,
-                    .overrideColor = {1.0f, 1.0f, 1.0f},
+                    .useTexture = false,
+                    .overrideColor = {0.58f, 0.776f, 0.941f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.6f},
                    {.position = {500.0f, 500.0f, -3000.0f},
                     .front = {0.0f, 0.0f, -1.0f},
                     .up = {0.0f, 1.0f, 0.0f},
                     .right = {1.0f, 0.0f, 0.0f},
-                    .speed = 500.0f,
+                    .speed = 700.0f,
                     .colors = {{0.7f, 0.75f, 0.8f},
                                {1.0f, 0.0f, 0.0f},
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = true,
-                    .overrideColor = {1.0f, 1.0f, 1.0f},
+                    .useTexture = false,
+                    .overrideColor = {0.737f, 0.8f, 0.851f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.6f}
 };
+
 static AutopilotCommand flight_plan[] = {
-        {FLY_STRAIGHT, 2.0f, 0.0f},     {TURN_LEFT, 3.0f, 0.0f},        {SET_CAMERA, 0.0f, 5.0f},
-        {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 1.0f, 1.0f},       {SET_SPEED, 2.0f, 300.0f},
-        {FLY_STRAIGHT, 2.0f, 0.0f},     {TURN_LEFT, 8.0f, 0.0f},        {FLY_STRAIGHT, 2.0f, 0.0f},
-        {SET_SPEED, 2.0f, 500.0f},      {SET_CAMERA, 0.0f, 2.0f},       {FLY_STRAIGHT, 1.0f, 0.0f},
-        {TURN_RIGHT, 1.0f, 0.0f},       {FLY_STRAIGHT, 1.5f, 0.0f},     {HOLD_ZOOM, 2.0f, 0.0f},
-        {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {TURN_RIGHT, 2.0f, 0.0f},
-        {FLY_STRAIGHT, 1.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {FLY_STRAIGHT, 1.0f, 0.0f},
-        {FLY_STRAIGHT, 6.0f, 0.0f},     {AUTO_PITCH_UP, 1.0f, 0.0f},    {FLY_STRAIGHT, 1.0f, 0.0f},
-        {TOGGLE_GRID_VIEW, 0.0f, 0.0f}, {FLY_STRAIGHT, 2.0f, 0.0f},     {SET_CAMERA, 0.0f, 2.0f},
-        {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {AUTO_PITCH_DOWN, 1.0f, 0.0f},
-        {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 8.0f},       {FLY_STRAIGHT, 2.0f, 0.0f},
-        {TOGGLE_GRID_VIEW, 0.0f, 0.0f}, {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 7.0f},
-        {FLY_STRAIGHT, 1.0f, 0.0f},     {TOGGLE_SPEED_LOCK, 0.0f, 0.0f}};
-static const int numCommands = sizeof(flight_plan) / sizeof(AutopilotCommand);
+    {FLY_STRAIGHT, 2.0f, 0.0f},     {TURN_LEFT, 3.0f, 0.0f},        {SET_CAMERA, 0.0f, 5.0f},
+    {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 1.0f, 1.0f},       {SET_SPEED, 2.0f, 300.0f},
+    {FLY_STRAIGHT, 2.0f, 0.0f},     {TURN_LEFT, 8.0f, 0.0f},        {FLY_STRAIGHT, 2.0f, 0.0f},
+    {SET_SPEED, 2.0f, 500.0f},      {SET_CAMERA, 0.0f, 2.0f},       {FLY_STRAIGHT, 1.0f, 0.0f},
+    {TURN_RIGHT, 1.0f, 0.0f},       {FLY_STRAIGHT, 1.5f, 0.0f},     {HOLD_ZOOM, 2.0f, 0.0f},
+    {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {TURN_RIGHT, 2.0f, 0.0f},
+    {FLY_STRAIGHT, 1.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {FLY_STRAIGHT, 1.0f, 0.0f},
+    {FLY_STRAIGHT, 6.0f, 0.0f},     {AUTO_PITCH_UP, 1.0f, 0.0f},    {FLY_STRAIGHT, 1.0f, 0.0f},
+    {FLY_STRAIGHT, 2.0f, 0.0f},     {SET_CAMERA, 0.0f, 2.0f},
+    {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 1.0f},       {AUTO_PITCH_DOWN, 1.0f, 0.0f},
+    {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 8.0f},       {FLY_STRAIGHT, 2.0f, 0.0f},
+    {FLY_STRAIGHT, 3.0f, 0.0f},     {SET_CAMERA, 0.0f, 7.0f},
+    {FLY_STRAIGHT, 1.0f, 0.0f},     {TOGGLE_SPEED_LOCK, 0.0f, 0.0f}
+};
+static const int numCommands = (int)(sizeof(flight_plan) / sizeof(AutopilotCommand));
 
-static const GLchar *planeVertexSource = "#version 100\n"
-                                         "attribute vec3 position;\n"
-                                         "attribute vec3 normal;\n"
-                                         "attribute vec2 texcoord;\n"
-                                         "varying vec3 vNormal;\n"
-                                         "varying vec2 vTexCoord;\n"
-                                         "uniform mat4 model;\n"
-                                         "uniform mat4 view;\n"
-                                         "uniform mat4 proj;\n"
-                                         "void main() {\n"
-                                         "   gl_Position = proj * view * model * vec4(position, 1.0);\n"
-                                         "   vNormal = mat3(model) * normal;\n"
-                                         "   vTexCoord = texcoord;\n"
-                                         "}\n";
-static const GLchar *planeFragmentSource = "#version 100\n"
-                                           "precision mediump float;\n"
-                                           "varying vec3 vNormal;\n"
-                                           "varying vec2 vTexCoord;\n"
-                                           "uniform vec3 u_lightDirection;\n"
-                                           "uniform sampler2D u_texture;\n"
-                                           "uniform bool u_useTexture;\n"        // Texture kullanılacak mı?
-                                           "uniform vec3 u_overrideColor;\n"     // Override rengi
-                                           "uniform vec3 u_shadeColor;\n"        // Shade rengi
-                                           "uniform float u_shadeStrength;\n"    // Shade gücü (0-1)
-                                           "void main() {\n"
-                                           "   vec3 finalColor;\n"
-                                           "   if (u_useTexture) {\n"
-                                           "       vec3 texColor = texture2D(u_texture, vTexCoord).rgb;\n"
-                                           "       finalColor = mix(texColor, u_shadeColor, u_shadeStrength);\n"
-                                           "   } else {\n"
-                                           "       finalColor = u_overrideColor;\n"
-                                           "   }\n"
-                                           "   vec3 lightDir = normalize(u_lightDirection);\n"
-                                           "   vec3 normal = normalize(vNormal);\n"
-                                           "   float diffuse = max(dot(normal, lightDir), 0.25);\n"
-                                           "   gl_FragColor = vec4(finalColor * diffuse, 1.0);\n"
-                                           "}\n";
+static const GLchar *planeVertexSource =
+    "#version 100\n"
+    "attribute vec3 position;\n"
+    "attribute vec3 normal;\n"
+    "attribute vec2 texcoord;\n"
+    "varying vec3 vNormal;\n"
+    "varying vec2 vTexCoord;\n"
+    "uniform mat4 model;\n"
+    "uniform mat4 view;\n"
+    "uniform mat4 proj;\n"
+    "void main() {\n"
+    "   gl_Position = proj * view * model * vec4(position, 1.0);\n"
+    "   vNormal = mat3(model) * normal;\n"
+    "   vTexCoord = texcoord;\n"
+    "}\n";
 
-void file_reader_callback_impl(void *ctx, const char *filename, int is_mtl, const char *obj_filename, char **buf,size_t *len) {
-    (void) ctx;
-    (void) is_mtl;
-    (void) obj_filename;
-    long file_size;
-    FILE *fp = fopen(filename, "rb");
-    if (!fp) {
-        *buf = NULL;
-        *len = 0;
-        return;
+static const GLchar *planeFragmentSource =
+    "#version 100\n"
+    "precision mediump float;\n"
+    "varying vec3 vNormal;\n"
+    "varying vec2 vTexCoord;\n"
+    "uniform vec3 u_lightDirection;\n"
+    "uniform sampler2D u_texture;\n"
+    "uniform bool u_useTexture;\n"
+    "uniform vec3 u_overrideColor;\n"
+    "uniform vec3 u_shadeColor;\n"
+    "uniform float u_shadeStrength;\n"
+    "void main() {\n"
+    "   vec3 finalColor;\n"
+    "   if (u_useTexture) {\n"
+    "       vec3 texColor = texture2D(u_texture, vTexCoord).rgb;\n"
+    "       finalColor = mix(texColor, u_shadeColor, u_shadeStrength);\n"
+    "   } else {\n"
+    "       finalColor = u_overrideColor;\n"
+    "   }\n"
+    "   vec3 lightDir = normalize(u_lightDirection);\n"
+    "   vec3 normal = normalize(vNormal);\n"
+    "   float diffuse = max(dot(normal, lightDir), 0.25);\n"
+    "   gl_FragColor = vec4(finalColor * diffuse, 1.0);\n"
+    "}\n";
+
+void file_reader_callback_impl(void *ctx, const char *filename, int is_mtl,
+                               const char *obj_filename, char **buf, size_t *len) {
+    (void)ctx; (void)is_mtl;
+    char full[512];
+    // ESKİ: filename[0] != '/'  → ./images/plane.obj gibi yolları da yanlışça birleştiriyordu
+    if (obj_filename && filename && strchr(filename, '/') == NULL) {
+        // SADECE "plane.mtl" gibi düz isimse OBJ'in klasörüyle birleştir
+        const char* slash = strrchr(obj_filename, '/');
+        if (!slash) snprintf(full, sizeof(full), "%s", filename);
+        else {
+            size_t dir_len = (size_t)(slash - obj_filename);
+            snprintf(full, sizeof(full), "%.*s/%s", (int)dir_len, obj_filename, filename);
+        }
+    } else {
+        // Zaten yolu içeriyorsa (./images/plane.obj gibi) doğrudan kullan
+        snprintf(full, sizeof(full), "%s", filename ? filename : "");
     }
+    FILE *fp = fopen(full, "rb");
+    if (!fp) { *buf = NULL; *len = 0; return; }
     fseek(fp, 0, SEEK_END);
-    file_size = ftell(fp);
+    long file_size = ftell(fp);
     fseek(fp, 0, SEEK_SET);
-    *buf = (char *) malloc(file_size + 1);
-    fread(*buf, 1, file_size, fp);
-    (*buf)[file_size] = '\0';
-    *len = file_size;
+    char* raw = (char*) malloc((size_t)file_size + 1);
+    if (!raw) { fclose(fp); *len = 0; return; }
+    fread(raw, 1, (size_t)file_size, fp);
+    raw[file_size] = '\0';
     fclose(fp);
+    // If this is an OBJ, strip vertex colors (v x y z r g b -> v x y z)
+    size_t out_len = 0;
+    const char* dot = strrchr(full, '.');
+    if (dot && strcmp(dot, ".obj") == 0) {
+        char* cleaned = preprocess_obj_strip_vertex_colors(raw, (size_t)file_size, &out_len);
+        free(raw);
+        if (!cleaned) { *buf = NULL; *len = 0; return; }
+        *buf = cleaned;
+        *len = out_len;
+    } else {
+        *buf = raw;
+        *len = (size_t)file_size;
+    }
 }
 
-bool init_plane() {
+bool init_plane(void) {
     shaderProgram = createShaderProgram(planeVertexSource, planeFragmentSource);
     if (shaderProgram == 0)
         return false;
 
-    const char *plane_obj_path = "../include/models/plane.obj";
-    int ret = tinyobj_parse_obj(&planeAttrib, &planeShapes, &numPlaneShapes, &planeMaterials, &numPlaneMaterials,
-                                plane_obj_path, file_reader_callback_impl, NULL, TINYOBJ_FLAG_TRIANGULATE);
-
+    const char *plane_obj_path = "./images/plane.obj";
+    int ret = tinyobj_parse_obj(&planeAttrib, &planeShapes, &numPlaneShapes,
+                                &planeMaterials, &numPlaneMaterials,
+                                plane_obj_path, file_reader_callback_impl, NULL,
+                                TINYOBJ_FLAG_TRIANGULATE);
     if (ret != TINYOBJ_SUCCESS || planeAttrib.num_vertices == 0) {
         fprintf(stderr, "TINYOBJ ERROR: Failed to parse plane object file.\n");
         return false;
     }
 
-    const int width = IMAGE_WIDTH;
-    const int height = IMAGE_HEIGHT;
-    const int channels = IMAGE_CHANNELS;
-    const unsigned char *original_data = plane_yavuzselim;
-
-    printf("Loading and flipping plane texture from embedded data...\n");
-
-    if (!original_data) {
-        fprintf(stderr, "ERROR: Embedded plane texture data is missing.\n");
+    // --- Load texture from PNG using stb_image (no embedded header) ---
+    int w, h, n;
+    stbi_set_flip_vertically_on_load(1);
+    unsigned char* data = stbi_load("./images/plane.png", &w, &h, &n, 0);
+    if (!data) {
+        fprintf(stderr, "ERROR: plane texture not found at ./images/plane_yavuzselim.png\n");
         return false;
-    }
-
-    const size_t image_size = width * height * channels;
-    unsigned char *flipped_data = (unsigned char *) malloc(image_size);
-    if (!flipped_data) {
-        fprintf(stderr, "ERROR: Could not allocate memory for flipped plane texture.\n");
-        return false;
-    }
-
-    for (int i = 0; i < height; i++) {
-        const unsigned char *src_row = original_data + ((height - 1 - i) * width * channels);
-        unsigned char *dest_row = flipped_data + (i * width * channels);
-        memcpy(dest_row, src_row, width * channels);
     }
 
     glGenTextures(1, &planeTextureID);
     glBindTexture(GL_TEXTURE_2D, planeTextureID);
-
-    GLenum format = (channels == 4) ? GL_RGBA : GL_RGB;
-    glTexImage2D(GL_TEXTURE_2D, 0, format, width, height, 0, format, GL_UNSIGNED_BYTE, flipped_data);
-
-    free(flipped_data);
-
+    GLenum fmt = (n == 4) ? GL_RGBA : GL_RGB;
+    glTexImage2D(GL_TEXTURE_2D, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, data);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    stbi_image_free(data);
 
-    printf("Successfully loaded plane texture from header.\n");
+    // Build interleaved buffers from tinyobj attrib
+    planeDrawCount = (GLsizei)planeAttrib.num_faces;
 
-    planeDrawCount = planeAttrib.num_faces;
-    GLfloat *v_buffer = (GLfloat *) malloc(planeDrawCount * 3 * sizeof(GLfloat));
-    GLfloat *n_buffer = (GLfloat *) malloc(planeDrawCount * 3 * sizeof(GLfloat));
-    GLfloat *t_buffer = (GLfloat *) malloc(planeDrawCount * 2 * sizeof(GLfloat));
+    GLfloat *v_buffer = (GLfloat *) malloc((size_t)planeDrawCount * 3 * sizeof(GLfloat));
+    GLfloat *n_buffer = (GLfloat *) malloc((size_t)planeDrawCount * 3 * sizeof(GLfloat));
+    GLfloat *t_buffer = (GLfloat *) malloc((size_t)planeDrawCount * 2 * sizeof(GLfloat));
+    if (!v_buffer || !n_buffer || !t_buffer) {
+        fprintf(stderr, "ERROR: Could not allocate plane buffers.\n");
+        free(v_buffer); free(n_buffer); free(t_buffer);
+        return false;
+    }
 
     for (GLsizei i = 0; i < planeDrawCount; ++i) {
         tinyobj_vertex_index_t idx = planeAttrib.faces[i];
         int v_idx = idx.v_idx, n_idx = idx.vn_idx, t_idx = idx.vt_idx;
         memcpy(v_buffer + i * 3, planeAttrib.vertices + v_idx * 3, 3 * sizeof(GLfloat));
-        if (n_idx >= 0)
-            memcpy(n_buffer + i * 3, planeAttrib.normals + n_idx * 3, 3 * sizeof(GLfloat));
-        if (t_idx >= 0)
-            memcpy(t_buffer + i * 2, planeAttrib.texcoords + t_idx * 2, 2 * sizeof(GLfloat));
+        if (n_idx >= 0) memcpy(n_buffer + i * 3, planeAttrib.normals  + n_idx * 3, 3 * sizeof(GLfloat));
+        else             memset(n_buffer + i * 3, 0, 3 * sizeof(GLfloat));
+        if (t_idx >= 0) memcpy(t_buffer + i * 2, planeAttrib.texcoords + t_idx * 2, 2 * sizeof(GLfloat));
+        else             memset(t_buffer + i * 2, 0, 2 * sizeof(GLfloat));
     }
 
     glGenBuffers(1, &VBO);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glBufferData(GL_ARRAY_BUFFER, planeDrawCount * 3 * sizeof(GLfloat), v_buffer, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)planeDrawCount * 3 * sizeof(GLfloat), v_buffer, GL_STATIC_DRAW);
+
     glGenBuffers(1, &NBO);
     glBindBuffer(GL_ARRAY_BUFFER, NBO);
-    glBufferData(GL_ARRAY_BUFFER, planeDrawCount * 3 * sizeof(GLfloat), n_buffer, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)planeDrawCount * 3 * sizeof(GLfloat), n_buffer, GL_STATIC_DRAW);
+
     glGenBuffers(1, &TBO);
     glBindBuffer(GL_ARRAY_BUFFER, TBO);
-    glBufferData(GL_ARRAY_BUFFER, planeDrawCount * 2 * sizeof(GLfloat), t_buffer, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, (GLsizeiptr)planeDrawCount * 2 * sizeof(GLfloat), t_buffer, GL_STATIC_DRAW);
 
-    free(v_buffer);
-    free(n_buffer);
-    free(t_buffer);
+    free(v_buffer); free(n_buffer); free(t_buffer);
     tinyobj_attrib_free(&planeAttrib);
     tinyobj_shapes_free(planeShapes, numPlaneShapes);
     tinyobj_materials_free(planeMaterials, numPlaneMaterials);
@@ -319,7 +379,7 @@ void update_enemy_plane(Plane *enemy) {
     glm_mat4_identity(enemy->modelMatrix);
     glm_translate(enemy->modelMatrix, enemy->position);
 
-    float yawAngle = atan2(-enemy->front[0], -enemy->front[2]);
+    float yawAngle = atan2f(-enemy->front[0], -enemy->front[2]);
     glm_rotate(enemy->modelMatrix, yawAngle, (vec3) {0.0f, 1.0f, 0.0f});
 }
 
@@ -341,17 +401,17 @@ void draw_plane(Plane *plane, mat4 view, mat4 proj) {
     GLint posAttrib = glGetAttribLocation(shaderProgram, "position");
     glEnableVertexAttribArray(posAttrib);
     glBindBuffer(GL_ARRAY_BUFFER, VBO);
-    glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, 0, (const GLvoid*)0);
 
     GLint normAttrib = glGetAttribLocation(shaderProgram, "normal");
     glEnableVertexAttribArray(normAttrib);
     glBindBuffer(GL_ARRAY_BUFFER, NBO);
-    glVertexAttribPointer(normAttrib, 3, GL_FLOAT, GL_FALSE, 0, 0);
+    glVertexAttribPointer(normAttrib, 3, GL_FLOAT, GL_FALSE, 0, (const GLvoid*)0);
 
     GLint texAttrib = glGetAttribLocation(shaderProgram, "texcoord");
     glEnableVertexAttribArray(texAttrib);
     glBindBuffer(GL_ARRAY_BUFFER, TBO);
-    glVertexAttribPointer(texAttrib, 2, GL_FLOAT, GL_FALSE, 0, 0);
+    glVertexAttribPointer(texAttrib, 2, GL_FLOAT, GL_FALSE, 0, (const GLvoid*)0);
 
     glDrawArrays(GL_TRIANGLES, 0, planeDrawCount);
 
@@ -362,43 +422,32 @@ void draw_plane(Plane *plane, mat4 view, mat4 proj) {
 
 void applyUpPitch(float rotation_speed) {
     float currentPitchDegrees = glm_deg(asinf(planes[0].front[1]));
-
     float pitchHeadroom = MAX_PITCH_ANGLE_DEGREES - currentPitchDegrees;
+    if (pitchHeadroom <= 0.0f) return;
 
-    if (pitchHeadroom <= 0.0f) {
-        return;
-    }
-
-    float smoothFactor = fmin(0.5f, pitchHeadroom / PITCH_SMOOTHING_RANGE);
-
+    float smoothFactor = fminf(0.5f, pitchHeadroom / PITCH_SMOOTHING_RANGE);
     smoothFactor = smoothFactor * smoothFactor;
-
     float finalRotationSpeed = rotation_speed * smoothFactor;
 
     mat4 rotation;
     glm_rotate_make(rotation, glm_rad(finalRotationSpeed), planes[0].right);
     glm_mat4_mulv3(rotation, planes[0].front, 1.0f, planes[0].front);
-    glm_mat4_mulv3(rotation, planes[0].up, 1.0f, planes[0].up);
+    glm_mat4_mulv3(rotation, planes[0].up,    1.0f, planes[0].up);
 }
 
 void applyDownPitch(float rotation_speed) {
     float currentPitchDegrees = glm_deg(asinf(planes[0].front[1]));
-
     float pitchHeadroom = currentPitchDegrees - (-MAX_PITCH_ANGLE_DEGREES);
+    if (pitchHeadroom <= 0.0f) return;
 
-    if (pitchHeadroom <= 0.0f) {
-        return;
-    }
-
-    float smoothFactor = fmin(0.5f, pitchHeadroom / PITCH_SMOOTHING_RANGE);
+    float smoothFactor = fminf(0.5f, pitchHeadroom / PITCH_SMOOTHING_RANGE);
     smoothFactor = smoothFactor * smoothFactor;
-
     float finalRotationSpeed = rotation_speed * smoothFactor;
 
     mat4 rotation;
     glm_rotate_make(rotation, glm_rad(-finalRotationSpeed), planes[0].right);
     glm_mat4_mulv3(rotation, planes[0].front, 1.0f, planes[0].front);
-    glm_mat4_mulv3(rotation, planes[0].up, 1.0f, planes[0].up);
+    glm_mat4_mulv3(rotation, planes[0].up,    1.0f, planes[0].up);
 }
 
 void applyLeftTurn(float rotation_speed, float roll_speed) {
@@ -407,9 +456,9 @@ void applyLeftTurn(float rotation_speed, float roll_speed) {
     glm_rotate_make(rotation, glm_rad(rotation_speed), worldUp);
     glm_mat4_mulv3(rotation, planes[0].front, 1.0f, planes[0].front);
     glm_mat4_mulv3(rotation, planes[0].right, 1.0f, planes[0].right);
-    glm_mat4_mulv3(rotation, planes[0].up, 1.0f, planes[0].up);
+    glm_mat4_mulv3(rotation, planes[0].up,    1.0f, planes[0].up);
     glm_rotate_make(rotation, glm_rad(-roll_speed), planes[0].front);
-    glm_mat4_mulv3(rotation, planes[0].up, 1.0f, planes[0].up);
+    glm_mat4_mulv3(rotation, planes[0].up,    1.0f, planes[0].up);
     glm_mat4_mulv3(rotation, planes[0].right, 1.0f, planes[0].right);
 }
 
@@ -419,13 +468,13 @@ void applyRightTurn(float rotation_speed, float roll_speed) {
     glm_rotate_make(rotation, glm_rad(-rotation_speed), worldUp);
     glm_mat4_mulv3(rotation, planes[0].front, 1.0f, planes[0].front);
     glm_mat4_mulv3(rotation, planes[0].right, 1.0f, planes[0].right);
-    glm_mat4_mulv3(rotation, planes[0].up, 1.0f, planes[0].up);
+    glm_mat4_mulv3(rotation, planes[0].up,    1.0f, planes[0].up);
     glm_rotate_make(rotation, glm_rad(roll_speed), planes[0].front);
-    glm_mat4_mulv3(rotation, planes[0].up, 1.0f, planes[0].up);
+    glm_mat4_mulv3(rotation, planes[0].up,    1.0f, planes[0].up);
     glm_mat4_mulv3(rotation, planes[0].right, 1.0f, planes[0].right);
 }
 
-void applyAutoLeveling() {
+void applyAutoLeveling(void) {
     vec3 worldUp = {0.0f, 1.0f, 0.0f};
     vec3 frontHorizontal;
     glm_vec3_copy(planes[0].front, frontHorizontal);
@@ -442,12 +491,12 @@ void applyAutoLeveling() {
     }
 }
 
-void reset_autopilot_state() {
+void reset_autopilot_state(void) {
     currentCommandIndex = 0;
     commandTimer = 0.0f;
 }
 
-void autoPilotMode() {
+void autoPilotMode(void) {
     commandTimer += deltaTime;
     AutopilotCommand currentCommand = flight_plan[currentCommandIndex];
 
@@ -458,7 +507,7 @@ void autoPilotMode() {
     }
 
     float rotation_speed = 45.0f * deltaTime;
-    float roll_speed = 30.0f * deltaTime;
+    float roll_speed     = 30.0f * deltaTime;
 
     float groundHeight = get_terrain_height(planes[0].position[0], planes[0].position[2]);
     float heightAboveGround = planes[0].position[1] - groundHeight;
@@ -511,58 +560,33 @@ void autoPilotMode() {
             break;
         case HOLD_ZOOM:
             fov -= zoomingSpeed * deltaTime;
-            if (fov < maximumZoomDistance)
-                fov = maximumZoomDistance;
+            if (fov < maximumZoomDistance) fov = maximumZoomDistance;
             break;
-
         case SET_CAMERA:
             if (currentCommand.value == 1.0f) {
-                offset_behind = 400.0f;
-                offset_above = 170.0f;
-                offset_right = 0.0f;
+                offset_behind = 400.0f; offset_above = 170.0f; offset_right = 0.0f;
             } else if (currentCommand.value == 2.0f) {
-                offset_behind = -50.0f;
-                offset_above = 30.0f;
-                offset_right = 0.0f;
+                offset_behind = -50.0f; offset_above = 30.0f; offset_right = 0.0f;
             } else if (currentCommand.value == 3.0f) {
-                offset_behind = 400.0f;
-                offset_above = 500.0f;
-                offset_right = 0.0f;
+                offset_behind = 400.0f; offset_above = 500.0f; offset_right = 0.0f;
             } else if (currentCommand.value == 4.0f) {
-                offset_behind = -300.0f;
-                offset_above = 100.0f;
-                offset_right = 0.0f;
+                offset_behind = -300.0f; offset_above = 100.0f; offset_right = 0.0f;
             } else if (currentCommand.value == 5.0f) {
-                offset_behind = -200.0f;
-                offset_above = 150.0f;
-                offset_right = 250.0f;
+                offset_behind = -200.0f; offset_above = 150.0f; offset_right = 250.0f;
             } else if (currentCommand.value == 6.0f) {
-                offset_behind = -200.0f;
-                offset_above = 150.0f;
-                offset_right = -250.0f;
+                offset_behind = -200.0f; offset_above = 150.0f; offset_right = -250.0f;
             } else if (currentCommand.value == 7.0f) {
-                offset_behind = -300.0f;
-                offset_above = -100.0f;
-                offset_right = 0.0f;
+                offset_behind = -300.0f; offset_above = -100.0f; offset_right = 0.0f;
             } else if (currentCommand.value == 8.0f) {
-                offset_behind = -75.0f;
-                offset_above = 200.0f;
-                offset_right = 550.0f;
+                offset_behind = -75.0f; offset_above = 200.0f; offset_right = 550.0f;
             }
             break;
         case TOGGLE_SPEED_LOCK:
             if (commandTimer < deltaTime * 1.5f) {
                 isSpeedFixed = !isSpeedFixed;
-                if (isSpeedFixed)
-                    fixedValue = currentMovementSpeed;
+                if (isSpeedFixed) fixedValue = currentMovementSpeed;
             }
             break;
-        case TOGGLE_GRID_VIEW:
-            if (commandTimer < deltaTime * 1.5f) {
-                isTriangleViewMode = !isTriangleViewMode;
-            }
-            break;
-
         case FLY_STRAIGHT:
         default:
             applyAutoLeveling();
@@ -575,8 +599,7 @@ void autoPilotMode() {
 
     if (currentCommand.action != HOLD_ZOOM && fov < originalFov) {
         fov += zoomingSpeed * deltaTime;
-        if (fov > originalFov)
-            fov = originalFov;
+        if (fov > originalFov) fov = originalFov;
     }
 
     glm_normalize(planes[0].front);
@@ -586,10 +609,10 @@ void autoPilotMode() {
     glm_normalize(planes[0].up);
 }
 
-void cleanup_plane() {
-    glDeleteProgram(shaderProgram);
-    glDeleteBuffers(1, &VBO);
-    glDeleteBuffers(1, &NBO);
-    glDeleteBuffers(1, &TBO);
-    glDeleteTextures(1, &planeTextureID);
+void cleanup_plane(void) {
+    if (shaderProgram) glDeleteProgram(shaderProgram);
+    if (VBO) glDeleteBuffers(1, &VBO);
+    if (NBO) glDeleteBuffers(1, &NBO);
+    if (TBO) glDeleteBuffers(1, &TBO);
+    if (planeTextureID) glDeleteTextures(1, &planeTextureID);
 }

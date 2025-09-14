@@ -158,8 +158,8 @@ static void hwc_to_chw_norm(const uint8_t* in, float* out, int W, int H) {
 
 OnnxConfig onnx_default_config(void) {
     OnnxConfig c;
-    c.intra_threads = 10;
-    c.inter_threads = 1;
+    c.intra_threads = 8;
+    c.inter_threads = 8;
     c.score_thresh = 0.30f;
     c.nms_iou_thresh = 0.45f;
     c.verbose = 0;

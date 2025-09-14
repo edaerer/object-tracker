@@ -1,17 +1,13 @@
 #include "skybox.h"
+#include "stb_image.h"
 
-#include "skybox/headerFiles/front2.h"
-#include "skybox/headerFiles/back2.h"
-#include "skybox/headerFiles/up2.h"
-#include "skybox/headerFiles/down2.h"
-#include "skybox/headerFiles/right2.h"
-#include "skybox/headerFiles/left2.h"
-
-#define SKYBOX_WIDTH FRONT2_WIDTH
-#define SKYBOX_HEIGHT FRONT2_HEIGHT
+#include <stdio.h>
+#include <stdbool.h>
 
 // --- Global State & Configuration Variables ---
-static GLuint skyboxShaderProgram, skyboxVBO, skyboxCubemapTexture;
+static GLuint skyboxShaderProgram = 0;
+static GLuint skyboxVBO = 0;
+static GLuint skyboxCubemapTexture = 0;
 
 // --- Shader Sources ---
 static const GLchar *skyboxVertexSource =
@@ -32,57 +28,47 @@ static const GLchar *skyboxFragmentSource =
     "precision mediump float;\n"
     "varying vec3 vTexCoord;\n"
     "uniform samplerCube skybox;\n"
-    "\n"
     "void main() {\n"
-    "    // Define the fog color to match the terrain fog.\n"
     "    const vec3 fogColor = vec3(0.95, 0.96, 0.97);\n"
-    "\n"
-    "    // Define the vertical range for the fog effect.\n"
-    "    //    -0.1 means the fog is fully solid slightly below the horizon.\n"
-    "    //    0.70 means the fog will have completely faded out as you look up.\n"
     "    const float FOG_HORIZON_START = -0.01;\n"
-    "    const float FOG_HORIZON_END = 0.70;\n"
-    "\n"
-    "    // Get the original color from the skybox texture.\n"
+    "    const float FOG_HORIZON_END   = 0.70;\n"
     "    vec4 skyColor = textureCube(skybox, vTexCoord);\n"
-    "\n"
-    "    // Calculate the fog blend factor based on the vertical look direction (vTexCoord.y).\n"
-    "    //    We invert the result of smoothstep so the fog is strong at the bottom (y=-1) and weak at the top (y=1).\n"
     "    float fogFactor = 1.0 - smoothstep(FOG_HORIZON_START, FOG_HORIZON_END, vTexCoord.y);\n"
-    "\n"
-    "    // Mix the original sky color with the fog color using the calculated factor.\n"
     "    vec3 finalColor = mix(skyColor.rgb, fogColor, fogFactor);\n"
-    "\n"
     "    gl_FragColor = vec4(finalColor, 1.0);\n"
     "}\n";
 
-static GLuint loadCubemap(const unsigned char *face_data[6], int face_width, int face_height)
+static GLuint loadCubemapFromFiles(const char* faces[6])
 {
-    GLuint textureID;
+    GLuint textureID = 0;
     glGenTextures(1, &textureID);
     glBindTexture(GL_TEXTURE_CUBE_MAP, textureID);
 
+    stbi_set_flip_vertically_on_load(0);
     for (unsigned int i = 0; i < 6; i++)
     {
-        if (face_data[i])
-        {
-            glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, GL_RGBA, face_width, face_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, face_data[i]);
-        }
-        else
-        {
-            fprintf(stderr, "Cubemap texture data is missing for face index: %d\n", i);
+        int w, h, n;
+        unsigned char* data = stbi_load(faces[i], &w, &h, &n, 0);
+        if (!data) {
+            fprintf(stderr, "Cubemap face missing: %s\n", faces[i]);
             glDeleteTextures(1, &textureID);
             return 0;
         }
+        GLenum fmt = (n == 4) ? GL_RGBA : GL_RGB;
+        glTexImage2D(GL_TEXTURE_CUBE_MAP_POSITIVE_X + i, 0, fmt, w, h, 0, fmt, GL_UNSIGNED_BYTE, data);
+        stbi_image_free(data);
     }
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+#ifdef GL_TEXTURE_WRAP_R
+    glTexParameteri(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+#endif
     return textureID;
 }
 
-bool init_skybox()
+bool init_skybox(void)
 {
     skyboxShaderProgram = createShaderProgram(skyboxVertexSource, skyboxFragmentSource);
     if (skyboxShaderProgram == 0)
@@ -91,73 +77,70 @@ bool init_skybox()
         return false;
     }
 
-    const unsigned char *skybox_faces[6] = {
-        front2, back2,
-        up2, down2,
-        right2, left2};
-
-    skyboxCubemapTexture = loadCubemap(skybox_faces, SKYBOX_WIDTH, SKYBOX_HEIGHT);
-
+    const char* face_files[6] = {
+        "./images/right2.jpg",
+        "./images/left2.jpg",
+        "./images/up2.jpg",
+        "./images/down2.jpg",
+        "./images/back2.jpg",
+        "./images/front2.jpg"
+    };
+    skyboxCubemapTexture = loadCubemapFromFiles(face_files);
     if (skyboxCubemapTexture == 0)
     {
         fprintf(stderr, "FATAL: Failed to load cubemap texture from files.\n");
         return false;
     }
 
-    // The rest of the function (creating VBO, etc.) remains the same.
-    GLfloat skyboxVertices[] = {
-        // Positions
-        // Right face (+X)
+    // A unit cube (36 vertices)
+    const GLfloat skyboxVertices[] = {
+        // +X
         1.0f, -1.0f, -1.0f,
-        1.0f, -1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, -1.0f,
+        1.0f, -1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f, -1.0f,
         1.0f, -1.0f, -1.0f,
-
-        // Left face (-X)
-        -1.0f, -1.0f, 1.0f,
-        -1.0f, -1.0f, -1.0f,
-        -1.0f, 1.0f, -1.0f,
-        -1.0f, 1.0f, -1.0f,
-        -1.0f, 1.0f, 1.0f,
-        -1.0f, -1.0f, 1.0f,
-
-        // Top face (+Y)
-        -1.0f, 1.0f, -1.0f,
-        1.0f, 1.0f, -1.0f,
-        1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f,
-        -1.0f, 1.0f, 1.0f,
-        -1.0f, 1.0f, -1.0f,
-
-        // Bottom face (-Y)
-        -1.0f, -1.0f, -1.0f,
-        -1.0f, -1.0f, 1.0f,
+        // -X
+       -1.0f, -1.0f,  1.0f,
+       -1.0f, -1.0f, -1.0f,
+       -1.0f,  1.0f, -1.0f,
+       -1.0f,  1.0f, -1.0f,
+       -1.0f,  1.0f,  1.0f,
+       -1.0f, -1.0f,  1.0f,
+        // +Y
+       -1.0f,  1.0f, -1.0f,
+        1.0f,  1.0f, -1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+       -1.0f,  1.0f,  1.0f,
+       -1.0f,  1.0f, -1.0f,
+        // -Y
+       -1.0f, -1.0f, -1.0f,
+       -1.0f, -1.0f,  1.0f,
         1.0f, -1.0f, -1.0f,
         1.0f, -1.0f, -1.0f,
-        -1.0f, -1.0f, 1.0f,
-        1.0f, -1.0f, 1.0f,
-
-        // Back face (+Z)
-        -1.0f, -1.0f, 1.0f,
-        -1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f,
-        1.0f, 1.0f, 1.0f,
-        1.0f, -1.0f, 1.0f,
-        -1.0f, -1.0f, 1.0f,
-
-        // Front face (-Z)
-        -1.0f, -1.0f, -1.0f,
+       -1.0f, -1.0f,  1.0f,
+        1.0f, -1.0f,  1.0f,
+        // +Z
+       -1.0f, -1.0f,  1.0f,
+       -1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f,  1.0f,  1.0f,
+        1.0f, -1.0f,  1.0f,
+       -1.0f, -1.0f,  1.0f,
+        // -Z
+       -1.0f, -1.0f, -1.0f,
         1.0f, -1.0f, -1.0f,
-        1.0f, 1.0f, -1.0f,
-        1.0f, 1.0f, -1.0f,
-        -1.0f, 1.0f, -1.0f,
-        -1.0f, -1.0f, -1.0f};
+        1.0f,  1.0f, -1.0f,
+        1.0f,  1.0f, -1.0f,
+       -1.0f,  1.0f, -1.0f,
+       -1.0f, -1.0f, -1.0f
+    };
 
     glGenBuffers(1, &skyboxVBO);
     glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
-    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), &skyboxVertices, GL_STATIC_DRAW);
+    glBufferData(GL_ARRAY_BUFFER, sizeof(skyboxVertices), skyboxVertices, GL_STATIC_DRAW);
 
     return true;
 }
@@ -169,9 +152,10 @@ void draw_skybox(mat4 view, mat4 proj)
 
     mat4 view_no_translation;
     glm_mat4_copy(view, view_no_translation);
-    view_no_translation[3][0] = 0;
-    view_no_translation[3][1] = 0;
-    view_no_translation[3][2] = 0;
+    // remove translation (column-major: col 3 is translation)
+    view_no_translation[3][0] = 0.0f;
+    view_no_translation[3][1] = 0.0f;
+    view_no_translation[3][2] = 0.0f;
 
     glUniformMatrix4fv(glGetUniformLocation(skyboxShaderProgram, "view"), 1, GL_FALSE, (GLfloat *)view_no_translation);
     glUniformMatrix4fv(glGetUniformLocation(skyboxShaderProgram, "proj"), 1, GL_FALSE, (GLfloat *)proj);
@@ -179,20 +163,21 @@ void draw_skybox(mat4 view, mat4 proj)
     glBindBuffer(GL_ARRAY_BUFFER, skyboxVBO);
     GLint posAttrib = glGetAttribLocation(skyboxShaderProgram, "position");
     glEnableVertexAttribArray(posAttrib);
-    glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), (void *)0);
+    glVertexAttribPointer(posAttrib, 3, GL_FLOAT, GL_FALSE, 3 * sizeof(GLfloat), (const GLvoid*)0);
 
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_CUBE_MAP, skyboxCubemapTexture);
     glUniform1i(glGetUniformLocation(skyboxShaderProgram, "skybox"), 0);
 
     glDrawArrays(GL_TRIANGLES, 0, 36);
+
     glDisableVertexAttribArray(posAttrib);
     glDepthFunc(GL_LESS);
 }
 
-void cleanup_skybox()
+void cleanup_skybox(void)
 {
-    glDeleteProgram(skyboxShaderProgram);
-    glDeleteBuffers(1, &skyboxVBO);
-    glDeleteTextures(1, &skyboxCubemapTexture);
+    if (skyboxShaderProgram) glDeleteProgram(skyboxShaderProgram);
+    if (skyboxVBO) glDeleteBuffers(1, &skyboxVBO);
+    if (skyboxCubemapTexture) glDeleteTextures(1, &skyboxCubemapTexture);
 }
