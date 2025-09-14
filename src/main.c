@@ -83,8 +83,8 @@ static GLuint box_shader_program = 0;
 #define DETECTION_MODEL_PATH "./models/model.onnx"
 static OnnxDetector g_detector;
 static int          g_detector_ready = 0;
-static float        g_thresh = 0.6f;
-static float        g_nms    = 0.5f;
+static float        g_thresh = 0.5f;
+static float        g_nms    = 0.45f;
 static double       g_last_det_ms = 0.0;
 
 /* ---- Detector readback buffers ---- */
@@ -213,14 +213,40 @@ static inline ViewRect det_letterbox_rect(int target, float aspect) {
     return r;
 }
 
-/* RGBA → RGB (no alpha), no flip */
-static inline void rgba_to_rgb(const unsigned char* src, unsigned char* dst, int pixels) {
-    for (int i = 0; i < pixels; ++i) {
-        dst[3*i+0] = src[4*i+0];
-        dst[3*i+1] = src[4*i+1];
-        dst[3*i+2] = src[4*i+2];
+// 0: benim uçak, 1: yakın enemy, 2: uzak enemy
+static inline void class_to_color(int cls, float *r, float *g, float *b) {
+    switch (cls) {
+        case 0: // benim uçak
+            *r = 0.15f; *g = 0.85f; *b = 1.00f;  // camgöbeği
+            break;
+        case 1: // yakın enemy
+            *r = 1.00f; *g = 0.25f; *b = 0.25f;  // kırmızımsı
+            break;
+        case 2: // uzak enemy
+            *r = 1.00f; *g = 0.85f; *b = 0.20f;  // sarı
+            break;
+        default:
+            *r = 1.00f; *g = 1.00f; *b = 1.00f;  // beyaz (bilinmiyorsa)
+            break;
     }
 }
+
+/* RGBA → RGB (no alpha), no flip */
+/* RGBA -> 3-kanal gri (R=G=B=Y). BT.601: Y = 0.299R + 0.587G + 0.114B */
+static inline void rgba_to_gray3(const unsigned char* src, unsigned char* dst, int pixels) {
+    for (int i = 0; i < pixels; ++i) {
+        unsigned int r = src[4*i + 0];
+        unsigned int g = src[4*i + 1];
+        unsigned int b = src[4*i + 2];
+
+        unsigned int y = (77*r + 150*g + 29*b + 128) >> 8;
+
+        dst[3*i + 0] = (unsigned char)y;
+        dst[3*i + 1] = (unsigned char)y;
+        dst[3*i + 2] = (unsigned char)y;
+    }
+}
+
 
 /* Vertical flip (in-place) */
 static inline void flip_inplace(unsigned char* data, int W, int H, int C) {
@@ -293,29 +319,60 @@ static void init_box_drawing(void) {
     box_shader_program = createShaderProgram(vs, fs);
     glGenBuffers(1, &box_vbo);
     glBindBuffer(GL_ARRAY_BUFFER, box_vbo);
-    glBufferData(GL_ARRAY_BUFFER, 8 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
+    // 48 float = 4 kenar * (2 üçgen * 3 tepe * 2 bileşen)
+    glBufferData(GL_ARRAY_BUFFER, 48 * sizeof(float), NULL, GL_DYNAMIC_DRAW);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
-static void drawBoundingBox(int L, int T, int R, int B) {
+static void drawBoundingBoxColored(int L, int T, int R, int B,
+                                   float thickness_px,
+                                   float r, float g, float b, float a) {
+    // Ekran -> NDC
     float nl = 2.0f * L / SCR_WIDTH  - 1.0f;
     float nr = 2.0f * R / SCR_WIDTH  - 1.0f;
     float nt = 1.0f - 2.0f * T / SCR_HEIGHT;
     float nb = 1.0f - 2.0f * B / SCR_HEIGHT;
-    float v[8] = { nl,nt, nr,nt, nr,nb, nl,nb };
+
+    // Piksel kalınlığını NDC’ye çevir
+    float dx = 2.0f * thickness_px / SCR_WIDTH;
+    float dy = 2.0f * thickness_px / SCR_HEIGHT;
+
+    // 4 kenar = 4 ince dikdörtgen = 8 üçgen = 24 vertex
+    float v[48] = {
+        // Sol
+        nl,     nt,   nl+dx, nt,   nl+dx, nb,
+        nl,     nt,   nl+dx, nb,   nl,     nb,
+
+        // Üst
+        nl,     nt,   nr,    nt,   nr,    nt - dy,
+        nl,     nt,   nr,    nt - dy,  nl, nt - dy,
+
+        // Sağ
+        nr - dx, nt,  nr,    nt,   nr,    nb,
+        nr - dx, nt,  nr,    nb,   nr - dx, nb,
+
+        // Alt
+        nl,     nb + dy,  nr, nb + dy,  nr, nb,
+        nl,     nb + dy,  nr, nb,       nl, nb
+    };
 
     glUseProgram(box_shader_program);
-    glUniform4f(glGetUniformLocation(box_shader_program, "color"), 1,0,0,1);
+    glUniform4f(glGetUniformLocation(box_shader_program, "color"), r, g, b, a);
+
     glBindBuffer(GL_ARRAY_BUFFER, box_vbo);
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
 
     GLint pos = glGetAttribLocation(box_shader_program, "position");
     glEnableVertexAttribArray(pos);
-    glVertexAttribPointer(pos, 2, GL_FLOAT, GL_FALSE, 2*sizeof(float), (void*)0);
-    glLineWidth(3.0f);
-    glDrawArrays(GL_LINE_LOOP, 0, 4);
+    glVertexAttribPointer(pos, 2, GL_FLOAT, GL_FALSE, 2 * sizeof(float), (void*)0);
+
+    glDisable(GL_DEPTH_TEST);           // overlay olarak üstte kalsın
+    glDrawArrays(GL_TRIANGLES, 0, 24);  // 24 vertex
+    glEnable(GL_DEPTH_TEST);
+
     glDisableVertexAttribArray(pos);
     glBindBuffer(GL_ARRAY_BUFFER, 0);
 }
+
 
 /* 608x608 RGB FBO for detector */
 bool init_detection_fbo(void) {
@@ -574,7 +631,7 @@ void detect_planes(void) {
     double t_read1 = get_current_time_millis();
 
     double t_convert0 = get_current_time_millis();
-    rgba_to_rgb(g_rgba_buffer, g_rgb_buffer, W*H);
+    rgba_to_gray3(g_rgba_buffer, g_rgb_buffer, W*H);
     flip_inplace(g_rgb_buffer, W, H, 3);
     double t_convert1 = get_current_time_millis();
 
@@ -605,7 +662,14 @@ void detect_planes(void) {
         if (R >= SCR_WIDTH)  R = SCR_WIDTH  - 1;
         if (B >= SCR_HEIGHT) B = SCR_HEIGHT - 1;
 
-        if (R > L && B > T) drawBoundingBox(L, T, R, B);
+        if (R > L && B > T) {
+            int cls = dets[i].cls;
+            float rr, gg, bb;
+            class_to_color(cls, &rr, &gg, &bb);
+
+            // Kalınlık: 4 px örneği
+            drawBoundingBoxColored(L, T, R, B, 4.0f, rr, gg, bb, 1.0f);
+        }
     }
     glEnable(GL_DEPTH_TEST);
     double t_draw1 = get_current_time_millis();
