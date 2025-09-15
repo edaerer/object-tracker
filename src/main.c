@@ -83,7 +83,7 @@ static GLuint box_shader_program = 0;
 #define DETECTION_MODEL_PATH "./models/model.onnx"
 static OnnxDetector g_detector;
 static int          g_detector_ready = 0;
-static float        g_thresh = 0.5f;
+static float        g_thresh = 0.6f;
 static float        g_nms    = 0.45f;
 static double       g_last_det_ms = 0.0;
 

@@ -115,7 +115,7 @@ Plane planes[MAX_PLANES] = {
                                {0.2f, 0.9f, 1.0f},
                                {1.0f, 0.5f, 0.1f},
                                {0.1f, 0.1f, 0.15f}},
-                    .useTexture = true,
+                    .useTexture = false,
                     .overrideColor = {0.58f, 0.776f, 0.941f},
                     .shadeColor = {0.0f, 0.0f, 0.0f},
                     .shadeStrength = 0.0f},
