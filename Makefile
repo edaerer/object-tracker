@@ -1,0 +1,43 @@
+SRC_DIR   := src
+INC_DIR   := include
+BUILD_DIR := build
+BIN_DIR   := ./
+LIB_DIR   := lib
+
+CC := gcc
+
+CFLAGS  := -std=c99 -I$(INC_DIR) -w
+RPATH   := -Wl,-rpath,'$$ORIGIN/$(LIB_DIR)'
+LIBS    := -L$(LIB_DIR) -lGL -lglfw -lm -l:libonnxruntime.so.1 $(RPATH)
+
+SOURCES := $(wildcard $(SRC_DIR)/*.c)
+OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
+DEPS    := $(OBJECTS:.o=.d)
+
+TARGET := $(BIN_DIR)/main
+
+all: $(TARGET)
+
+$(TARGET): $(OBJECTS) | $(BIN_DIR)
+	$(CC) $(OBJECTS) -o $@ $(LIBS)
+
+$(BUILD_DIR)/%.o: $(SRC_DIR)/%.c | $(BUILD_DIR)
+	$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
+
+$(BUILD_DIR) $(BIN_DIR):
+	mkdir -p $@
+
+clean:
+	rm -rf $(BUILD_DIR) $(BIN_DIR)/main
+
+rebuild: clean all
+
+debug: CFLAGS += -O0 -g
+debug: rebuild
+
+release: CFLAGS += -O2 -DNDEBUG
+release: rebuild
+
+-include $(DEPS)
+
+.PHONY: all clean rebuild debug release help
