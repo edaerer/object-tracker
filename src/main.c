@@ -598,7 +598,6 @@ void detect_planes(void) {
     const size_t need_rgba = (size_t)W * H * 4;
     const size_t need_rgb  = (size_t)W * H * 3;
 
-    double t_realloc0 = get_current_time_millis();
     if (g_frame_buf_capacity < need_rgba) {
         unsigned char* a = (unsigned char*)realloc(g_rgba_buffer, need_rgba);
         unsigned char* b = (unsigned char*)realloc(g_rgb_buffer,  need_rgb);
@@ -607,7 +606,6 @@ void detect_planes(void) {
         g_rgb_buffer  = b;
         g_frame_buf_capacity = need_rgba;
     }
-    double t_realloc1 = get_current_time_millis();
 
     float screen_aspect = (float)SCR_WIDTH / (float)SCR_HEIGHT;
     ViewRect lb = det_letterbox_rect(DET_W, screen_aspect);
@@ -677,14 +675,13 @@ void detect_planes(void) {
     onnx_free_detections(dets);
 
     // --- Log timings ---
-    printf("[DET] realloc=%.2fms render=%.2fms read=%.2fms convert=%.2fms infer=%.2fms draw=%.2fms total=%.2fms\n",
-           (t_realloc1 - t_realloc0),
+    printf("[DET] render=%.2fms read=%.2fms convert=%.2fms infer=%.2fms draw=%.2fms total=%.2fms\n",
            (t_render1 - t_render0),
            (t_read1   - t_read0),
            (t_convert1- t_convert0),
            (t_infer1  - t_infer0),
            (t_draw1   - t_draw0),
-           (t_draw1   - t_realloc0));
+           (t_draw1   - t_render0));
 }
 
 
