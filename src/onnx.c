@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "onnx/onnxruntime_c_api.h"
+#include "onnxruntime_c_api.h"
 
 /* ---------------- Dahili Yardımcılar ---------------- */
 

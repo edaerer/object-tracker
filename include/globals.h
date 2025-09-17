@@ -12,7 +12,7 @@
 #include <math.h>
 #include "cglm/cglm.h"
 #include "stb_image.h"
-#include "text/text.h"
+#include "text.h"
 #include "tiny_obj_loader.h"
 
 // =========================================
