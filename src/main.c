@@ -253,7 +253,6 @@ static inline void rgba_flip_gray3_chw_norm(
             float g = p[1] * inv255;
             float b = p[2] * inv255;
 
-            // 0–1 aralığında BT.601 luma (yaklaşık)
             float yval = 0.299f * r + 0.587f * g + 0.114f * b;
 
             size_t idx = (size_t)y * (size_t)W + (size_t)x;
@@ -262,50 +261,6 @@ static inline void rgba_flip_gray3_chw_norm(
             dst[2 * stride_ch + idx] = yval;
         }
     }
-}
-
-static inline uint8_t f32_to_u8_clamp(float v) {
-    float x = v * 255.0f;
-    int xi = (int)lrintf(x);
-    if (xi < 0)   xi = 0;
-    if (xi > 255) xi = 255;
-    return (uint8_t)xi;
-}
-
-int write_chw_gray_png(
-    const char* filename,
-    const float* dst_chw, // senin fonksiyonundan çıkan CHW (3 kanal aynı)
-    int W, int H,
-    int already_normalized_to_01 // 1: dst 0–1 aralığında, 0: 0–255 aralığında
-){
-    const size_t stride_ch = (size_t)W * (size_t)H;
-    const float* ch0 = dst_chw; // gri değeri 3 kanalda aynı, 0. kanalı al yeter
-
-    uint8_t* gray = (uint8_t*)malloc((size_t)W * (size_t)H);
-    if (!gray) return 0;
-
-    for (int y = 0; y < H; ++y) {
-        for (int x = 0; x < W; ++x) {
-            size_t idx = (size_t)y * (size_t)W + (size_t)x;
-            float v = ch0[idx];
-
-            uint8_t g;
-            if (already_normalized_to_01) {
-                g = f32_to_u8_clamp(v);       // 0–1 → 0–255
-            } else {
-                // 0–255 aralığında float ise:
-                int xi = (int)lrintf(v);
-                if (xi < 0)   xi = 0;
-                if (xi > 255) xi = 255;
-                g = (uint8_t)xi;
-            }
-            gray[idx] = g;
-        }
-    }
-
-    int ok = stbi_write_png(filename, W, H, 1, gray, W);
-    free(gray);
-    return ok;
 }
 
 /* Minimal shader util */
@@ -713,16 +668,6 @@ void detect_planes(void) {
     }
     glEnable(GL_DEPTH_TEST);
     double t_draw1 = get_current_time_millis();
-
-    /*
-    char filename[64];
-    snprintf(filename, sizeof(filename), "frames/frame_%ld.png", get_current_time_millis2());
-    if (!write_chw_gray_png(filename, chw, W, H, 1)) {
-        fprintf(stderr, "PNG kaydedilemedi: %s\n", filename);
-    } else {
-        printf("PNG kaydedildi: %s\n", filename);
-    }
-    */
 
     free(chw);
     onnx_free_detections(dets);
