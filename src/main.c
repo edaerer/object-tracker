@@ -83,7 +83,7 @@ static GLuint box_vbo = 0;
 static GLuint box_shader_program = 0;
 
 /* ---- ONNX detector ---- */
-#define DETECTION_MODEL_PATH "./models/640_yolov8n.onnx"
+#define DETECTION_MODEL_PATH "./models/640_yolov11n.onnx"
 static OnnxDetector g_detector;
 static int          g_detector_ready = 0;
 static float        g_thresh = 0.6f;
