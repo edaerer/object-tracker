@@ -94,9 +94,9 @@ static double       g_last_det_ms = 0.0;
 static unsigned char *g_rgba_buffer = NULL;
 static size_t         g_frame_buf_capacity = 0;
 
-/* ---- 640x640 detector FBO (letterboxed) ---- */
-#define DET_W 640
-#define DET_H 640
+/* ---- 448x448 detector FBO (letterboxed) ---- */
+#define DET_W 448
+#define DET_H 448
 static GLuint g_det_fbo       = 0;
 static GLuint g_det_color_tex = 0;
 static GLuint g_det_depth_rbo = 0;
