@@ -13,6 +13,9 @@
 #include <stdbool.h>
 #include <math.h>
 
+#define STB_IMAGE_WRITE_IMPLEMENTATION
+#include "stb_image_write.h"
+
 /* ---- Runtime / build options ---- */
 #define KEYBOARD_ENABLED 1
 #define USE_VSYNC 1
@@ -80,7 +83,7 @@ static GLuint box_vbo = 0;
 static GLuint box_shader_program = 0;
 
 /* ---- ONNX detector ---- */
-#define DETECTION_MODEL_PATH "./models/model.onnx"
+#define DETECTION_MODEL_PATH "./models/640_yolov8n.onnx"
 static OnnxDetector g_detector;
 static int          g_detector_ready = 0;
 static float        g_thresh = 0.6f;
@@ -89,12 +92,11 @@ static double       g_last_det_ms = 0.0;
 
 /* ---- Detector readback buffers ---- */
 static unsigned char *g_rgba_buffer = NULL;
-static unsigned char *g_rgb_buffer  = NULL;
 static size_t         g_frame_buf_capacity = 0;
 
-/* ---- 608x608 detector FBO (letterboxed) ---- */
-#define DET_W 608
-#define DET_H 608
+/* ---- 640x640 detector FBO (letterboxed) ---- */
+#define DET_W 640
+#define DET_H 640
 static GLuint g_det_fbo       = 0;
 static GLuint g_det_color_tex = 0;
 static GLuint g_det_depth_rbo = 0;
@@ -106,8 +108,6 @@ void detect_planes(void);
 void processInput(void);
 void whereItCrashed(void);
 bool init_detection_fbo(void);
-static void RENDER_FOR_DET(int w, int h);
-static inline void flip_rgb_inplace(unsigned char* data, int W, int H);
 void framebuffer_size_callback(GLFWwindow *window, int width, int height);
 void CLEANUP_SYSTEM(void);
 
@@ -123,6 +123,11 @@ static double get_current_time_millis(void) {
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
     return (double)now.tv_sec * 1000.0 + (double)now.tv_nsec / 1e6;
+}
+static long get_current_time_millis2(void) {
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    return (long)(now.tv_sec * 1000) + (long)(now.tv_nsec / 1e6);
 }
 
 static void update_system(double dt) {
@@ -231,36 +236,76 @@ static inline void class_to_color(int cls, float *r, float *g, float *b) {
     }
 }
 
-/* RGBA → RGB (no alpha), no flip */
-/* RGBA -> 3-kanal gri (R=G=B=Y). BT.601: Y = 0.299R + 0.587G + 0.114B */
-static inline void rgba_to_gray3(const unsigned char* src, unsigned char* dst, int pixels) {
-    for (int i = 0; i < pixels; ++i) {
-        unsigned int r = src[4*i + 0];
-        unsigned int g = src[4*i + 1];
-        unsigned int b = src[4*i + 2];
+static inline void rgba_flip_gray3_chw_norm(
+    const unsigned char* src,
+    float* dst,
+    int W, int H
+) {
+    const float inv255 = 1.0f / 255.0f;
+    size_t stride_ch = (size_t)W * (size_t)H;
 
-        unsigned int y = (77*r + 150*g + 29*b + 128) >> 8;
+    for (int y = 0; y < H; ++y) {
+        int sy = H - 1 - y;
+        for (int x = 0; x < W; ++x) {
+            const unsigned char* p = src + ((size_t)sy * (size_t)W + (size_t)x) * 4;
 
-        dst[3*i + 0] = (unsigned char)y;
-        dst[3*i + 1] = (unsigned char)y;
-        dst[3*i + 2] = (unsigned char)y;
+            float r = p[0] * inv255;
+            float g = p[1] * inv255;
+            float b = p[2] * inv255;
+
+            // 0–1 aralığında BT.601 luma (yaklaşık)
+            float yval = 0.299f * r + 0.587f * g + 0.114f * b;
+
+            size_t idx = (size_t)y * (size_t)W + (size_t)x;
+            dst[0 * stride_ch + idx] = yval;
+            dst[1 * stride_ch + idx] = yval;
+            dst[2 * stride_ch + idx] = yval;
+        }
     }
 }
 
+static inline uint8_t f32_to_u8_clamp(float v) {
+    float x = v * 255.0f;
+    int xi = (int)lrintf(x);
+    if (xi < 0)   xi = 0;
+    if (xi > 255) xi = 255;
+    return (uint8_t)xi;
+}
 
-/* Vertical flip (in-place) */
-static inline void flip_inplace(unsigned char* data, int W, int H, int C) {
-    size_t stride = (size_t)W * (size_t)C;
-    unsigned char* tmp = (unsigned char*)malloc(stride);
-    if (!tmp) return;
-    for (int y = 0; y < H/2; ++y) {
-        unsigned char* a = data + (size_t)y * stride;
-        unsigned char* b = data + (size_t)(H-1-y) * stride;
-        memcpy(tmp, a, stride);
-        memcpy(a, b, stride);
-        memcpy(b, tmp, stride);
+int write_chw_gray_png(
+    const char* filename,
+    const float* dst_chw, // senin fonksiyonundan çıkan CHW (3 kanal aynı)
+    int W, int H,
+    int already_normalized_to_01 // 1: dst 0–1 aralığında, 0: 0–255 aralığında
+){
+    const size_t stride_ch = (size_t)W * (size_t)H;
+    const float* ch0 = dst_chw; // gri değeri 3 kanalda aynı, 0. kanalı al yeter
+
+    uint8_t* gray = (uint8_t*)malloc((size_t)W * (size_t)H);
+    if (!gray) return 0;
+
+    for (int y = 0; y < H; ++y) {
+        for (int x = 0; x < W; ++x) {
+            size_t idx = (size_t)y * (size_t)W + (size_t)x;
+            float v = ch0[idx];
+
+            uint8_t g;
+            if (already_normalized_to_01) {
+                g = f32_to_u8_clamp(v);       // 0–1 → 0–255
+            } else {
+                // 0–255 aralığında float ise:
+                int xi = (int)lrintf(v);
+                if (xi < 0)   xi = 0;
+                if (xi > 255) xi = 255;
+                g = (uint8_t)xi;
+            }
+            gray[idx] = g;
+        }
     }
-    free(tmp);
+
+    int ok = stbi_write_png(filename, W, H, 1, gray, W);
+    free(gray);
+    return ok;
 }
 
 /* Minimal shader util */
@@ -410,8 +455,6 @@ static void render_for_detection(ViewRect vp, mat4 det_view, mat4 det_proj) {
 
     glViewport(vp.x, vp.y, vp.w, vp.h);
     draw_skybox(det_view, det_proj);
-    update_chunks();
-    draw_chunks(det_view, det_proj);
     for (int i = 0; i < MAX_PLANES; ++i)
         draw_plane(&planes[i], det_view, det_proj);
 }
@@ -599,11 +642,7 @@ void detect_planes(void) {
     const size_t need_rgb  = (size_t)W * H * 3;
 
     if (g_frame_buf_capacity < need_rgba) {
-        unsigned char* a = (unsigned char*)realloc(g_rgba_buffer, need_rgba);
-        unsigned char* b = (unsigned char*)realloc(g_rgb_buffer,  need_rgb);
-        if (!a || !b) { free(a); free(b); return; }
-        g_rgba_buffer = a;
-        g_rgb_buffer  = b;
+        g_rgba_buffer = realloc(g_rgba_buffer, need_rgba);
         g_frame_buf_capacity = need_rgba;
     }
 
@@ -618,7 +657,7 @@ void detect_planes(void) {
     GLint prev_vp[4];   glGetIntegerv(GL_VIEWPORT, prev_vp);
 
     double t_render0 = get_current_time_millis();
-    glBindFramebuffer(GL_FRAMEBUFFER, g_det_fbo);  /* if 0, fallback to default */
+    glBindFramebuffer(GL_FRAMEBUFFER, g_det_fbo);
     render_for_detection(lb, det_view, det_proj);
     glFinish();
     double t_render1 = get_current_time_millis();
@@ -629,8 +668,8 @@ void detect_planes(void) {
     double t_read1 = get_current_time_millis();
 
     double t_convert0 = get_current_time_millis();
-    rgba_to_gray3(g_rgba_buffer, g_rgb_buffer, W*H);
-    flip_inplace(g_rgb_buffer, W, H, 3);
+    float* chw = malloc(sizeof(float) * 3 * W * H);
+    rgba_flip_gray3_chw_norm(g_rgba_buffer, chw, W, H);
     double t_convert1 = get_current_time_millis();
 
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
@@ -638,7 +677,7 @@ void detect_planes(void) {
 
     OnnxDet* dets = NULL; int det_count = 0;
     double t_infer0 = get_current_time_millis();
-    int rc = onnx_predict(&g_detector, g_rgb_buffer, W, H, &dets, &det_count);
+    int rc = onnx_predict(&g_detector, chw, W, H, &dets, &det_count);
     double t_infer1 = get_current_time_millis();
     if (rc != ONNX_OK) { return; }
     g_last_det_ms = (t_infer1 - t_infer0);
@@ -649,6 +688,11 @@ void detect_planes(void) {
     double t_draw0 = get_current_time_millis();
     glDisable(GL_DEPTH_TEST);
     for (int i = 0; i < det_count; ++i) {
+        if (dets[i].score < g_thresh)
+            continue;
+        if (dets[i].cls == 0 && dets[i].score < 0.9)
+            continue;
+
         float x1 = (dets[i].x1 - (float)lb.x) * sx;
         float y1 = (dets[i].y1 - (float)lb.y) * sy;
         float x2 = (dets[i].x2 - (float)lb.x) * sx;
@@ -664,14 +708,23 @@ void detect_planes(void) {
             int cls = dets[i].cls;
             float rr, gg, bb;
             class_to_color(cls, &rr, &gg, &bb);
-
-            // Kalınlık: 4 px örneği
             drawBoundingBoxColored(L, T, R, B, 4.0f, rr, gg, bb, 1.0f);
         }
     }
     glEnable(GL_DEPTH_TEST);
     double t_draw1 = get_current_time_millis();
 
+    /*
+    char filename[64];
+    snprintf(filename, sizeof(filename), "frames/frame_%ld.png", get_current_time_millis2());
+    if (!write_chw_gray_png(filename, chw, W, H, 1)) {
+        fprintf(stderr, "PNG kaydedilemedi: %s\n", filename);
+    } else {
+        printf("PNG kaydedildi: %s\n", filename);
+    }
+    */
+
+    free(chw);
     onnx_free_detections(dets);
 
     // --- Log timings ---
@@ -848,7 +901,6 @@ void CLEANUP_SYSTEM(void) {
     if (g_detector_ready) { onnx_destroy(&g_detector); g_detector_ready = 0; }
 
     if (g_rgba_buffer) { free(g_rgba_buffer); g_rgba_buffer = NULL; }
-    if (g_rgb_buffer)  { free(g_rgb_buffer);  g_rgb_buffer  = NULL; }
     g_frame_buf_capacity = 0;
 
     if (g_det_depth_rbo)  { glDeleteRenderbuffers(1, &g_det_depth_rbo);  g_det_depth_rbo  = 0; }

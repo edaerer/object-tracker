@@ -37,123 +37,6 @@ typedef struct {
     int cls;
 } RawDet;
 
-/* IoU */
-static float iou_raw(const RawDet* a, const RawDet* b) {
-    float xx1 = fmaxf(a->x1, b->x1);
-    float yy1 = fmaxf(a->y1, b->y1);
-    float xx2 = fminf(a->x2, b->x2);
-    float yy2 = fminf(a->y2, b->y2);
-    float w = fmaxf(0.f, xx2 - xx1);
-    float h = fmaxf(0.f, yy2 - yy1);
-    float inter = w * h;
-    float areaA = fmaxf(0.f, a->x2 - a->x1) * fmaxf(0.f, a->y2 - a->y1);
-    float areaB = fmaxf(0.f, b->x2 - b->x1) * fmaxf(0.f, b->y2 - b->y1);
-    return inter / (areaA + areaB - inter + EPS_F);
-}
-
-static void nms_one_class(RawDet* dets, int count, float iou_thr, RawDet* out, int* out_count) {
-    int* sup = (int*)calloc(count, sizeof(int));
-    if(!sup) return;
-    for (int i=0;i<count;i++) {
-        if (sup[i]) continue;
-        out[(*out_count)++] = dets[i];
-        for (int j=i+1;j<count;j++) {
-            if (sup[j]) continue;
-            if (iou_raw(&dets[i], &dets[j]) > iou_thr) sup[j] = 1;
-        }
-    }
-    free(sup);
-}
-
-/* Basit selection sort (skora göre azalan) */
-static void sort_by_score(RawDet* dets, int n) {
-    for (int i=0;i<n-1;i++) {
-        int mx=i;
-        for (int j=i+1;j<n;j++)
-            if (dets[j].score > dets[mx].score) mx=j;
-        if (mx!=i) {
-            RawDet tmp=dets[i]; dets[i]=dets[mx]; dets[mx]=tmp;
-        }
-    }
-}
-
-static int class_aware_nms(const float* preds, int rows, int cols,
-                           float score_thr, float iou_thr,
-                           RawDet** out_ptr, int* out_count) {
-    int num_cls = cols - 4;
-    int capacity = rows * num_cls;
-    if (capacity > MAX_DETECTIONS_TEMP) capacity = MAX_DETECTIONS_TEMP;
-
-    RawDet* accum = (RawDet*)malloc(sizeof(RawDet)*capacity);
-    if(!accum) return ONNX_ERR_MEMORY;
-    int total=0;
-
-    RawDet* buf = (RawDet*)malloc(sizeof(RawDet)*rows);
-    RawDet* nms_tmp = (RawDet*)malloc(sizeof(RawDet)*rows);
-    if(!buf || !nms_tmp) {
-        free(accum); free(buf); free(nms_tmp);
-        return ONNX_ERR_MEMORY;
-    }
-
-    for (int c=0; c<num_cls; c++) {
-        int bc=0;
-        for (int r=0; r<rows; r++) {
-            const float* p = preds + r*cols;
-            float s = p[4+c];
-            if (s >= score_thr) {
-                buf[bc].x1 = p[0];
-                buf[bc].y1 = p[1];
-                buf[bc].x2 = p[2];
-                buf[bc].y2 = p[3];
-                buf[bc].score = s;
-                buf[bc].cls = c;
-                bc++;
-            }
-        }
-        if (!bc) continue;
-        sort_by_score(buf, bc);
-        int after=0;
-        nms_one_class(buf, bc, iou_thr, nms_tmp, &after);
-        for (int i=0;i<after;i++) {
-            if (total < capacity) accum[total++] = nms_tmp[i];
-        }
-    }
-
-    free(buf); free(nms_tmp);
-    *out_ptr = accum;
-    *out_count = total;
-    return ONNX_OK;
-}
-
-/* Resize (nearest) */
-static void resize_nearest(const uint8_t* src, int sw, int sh,
-                           uint8_t* dst, int dw, int dh) {
-    for (int y=0; y<dh; y++) {
-        int sy = (int)((float)y * sh / dh);
-        if (sy>=sh) sy=sh-1;
-        for (int x=0; x<dw; x++) {
-            int sx = (int)((float)x * sw / dw);
-            if (sx>=sw) sx=sw-1;
-            const uint8_t* sp = src + (size_t)(sy*sw+sx)*3;
-            uint8_t* dp = dst + (size_t)(y*dw+x)*3;
-            dp[0]=sp[0]; dp[1]=sp[1]; dp[2]=sp[2];
-        }
-    }
-}
-
-/* HWC -> CHW float norm */
-static void hwc_to_chw_norm(const uint8_t* in, float* out, int W, int H) {
-    int stride = W*H;
-    for(int y=0;y<H;y++) {
-        for(int x=0;x<W;x++) {
-            const uint8_t* p = in + (size_t)(y*W+x)*3;
-            out[0*stride + y*W + x] = p[0]/255.0f;
-            out[1*stride + y*W + x] = p[1]/255.0f;
-            out[2*stride + y*W + x] = p[2]/255.0f;
-        }
-    }
-}
-
 /* ---------------- Dış API Uygulamaları ---------------- */
 
 OnnxConfig onnx_default_config(void) {
@@ -251,39 +134,21 @@ int onnx_predict(const OnnxDetector* detector,
     int target_w = (int)detector->in_w;
     int target_h = (int)detector->in_h;
 
-    uint8_t* resized = NULL;
-    const uint8_t* use_img = img_rgb;
-    if (w != target_w || h != target_h) {
-        resized = (uint8_t*)malloc((size_t)target_w * target_h * 3);
-        if (!resized) return ONNX_ERR_MEMORY;
-        resize_nearest(img_rgb, w, h, resized, target_w, target_h);
-        use_img = resized;
-    }
-
-    size_t tensor_elems = (size_t)detector->in_c * target_h * target_w;
-    float* input_buf = (float*)malloc(sizeof(float)*tensor_elems);
-    if(!input_buf) {
-        free(resized);
-        return ONNX_ERR_MEMORY;
-    }
-    hwc_to_chw_norm(use_img, input_buf, target_w, target_h);
-
+    size_t tensor_elems = (size_t)detector->in_c * detector->in_h * detector->in_w;
     int64_t shape[4] = {1, 3, detector->in_h, detector->in_w};
+
     OrtValue* input_tensor = NULL;
     OrtStatus* st = detector->api->CreateTensorWithDataAsOrtValue(
         detector->mem_info,
-        input_buf,
-        sizeof(float)*tensor_elems,
+        (void*)img_rgb,
+        sizeof(float) * tensor_elems,
         shape, 4,
         ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
         &input_tensor
     );
     if (st) {
-        const char* msg = detector->api->GetErrorMessage(st);
-        fprintf(stderr, "Tensor oluşturma hatası: %s\n", msg?msg:"(null)");
+        fprintf(stderr, "Tensor oluşturma hatası: %s\n", detector->api->GetErrorMessage(st));
         detector->api->ReleaseStatus(st);
-        free(resized);
-        free(input_buf);
         return ONNX_ERR_RUNTIME;
     }
 
@@ -297,122 +162,65 @@ int onnx_predict(const OnnxDetector* detector,
         &output_tensor
     );
     if (st) {
-        const char* msg = detector->api->GetErrorMessage(st);
-        fprintf(stderr, "Run hatası: %s\n", msg?msg:"(null)");
+        fprintf(stderr, "Run hatası: %s\n", detector->api->GetErrorMessage(st));
         detector->api->ReleaseStatus(st);
         detector->api->ReleaseValue(input_tensor);
-        free(resized);
-        free(input_buf);
         return ONNX_ERR_RUNTIME;
     }
 
-    int is_tensor=0;
+    int is_tensor = 0;
     detector->api->IsTensor(output_tensor, &is_tensor);
     if (!is_tensor) {
         fprintf(stderr, "Çıktı tensor değil.\n");
         detector->api->ReleaseValue(output_tensor);
         detector->api->ReleaseValue(input_tensor);
-        free(resized);
-        free(input_buf);
         return ONNX_ERR_MODEL;
     }
 
-    OrtTensorTypeAndShapeInfo* oinfo=NULL;
+    OrtTensorTypeAndShapeInfo* oinfo = NULL;
     detector->api->GetTensorTypeAndShape(output_tensor, &oinfo);
-    size_t odim_count=0;
+    int64_t odims[3] = {0};
+    size_t odim_count = 0;
     detector->api->GetDimensionsCount(oinfo, &odim_count);
-
-    int64_t odims[8];
-    if (odim_count > 8) odim_count = 8; /* güvenlik */
     detector->api->GetDimensions(oinfo, odims, odim_count);
 
-    int rows=0, cols=0;
-    if (odim_count==3) { /* [1, N, 4+K] */
-        rows = (int)odims[1];
-        cols = (int)odims[2];
-    } else if (odim_count==2) { /* [N, 4+K] */
-        rows = (int)odims[0];
-        cols = (int)odims[1];
-    } else {
-        fprintf(stderr, "Beklenmeyen çıktı boyutu (dim=%zu)\n", odim_count);
-        detector->api->ReleaseTensorTypeAndShapeInfo(oinfo);
-        detector->api->ReleaseValue(output_tensor);
-        detector->api->ReleaseValue(input_tensor);
-        free(resized);
-        free(input_buf);
-        return ONNX_ERR_MODEL;
-    }
+    // Beklenen: [1, num_det, 6]
+    int num_det = (int)odims[1];
+    int elem_per_det = (int)odims[2];
 
     float* out_data = NULL;
     detector->api->GetTensorMutableData(output_tensor, (void**)&out_data);
 
-    RawDet* raw = NULL;
-    int raw_count=0;
-    int rc = class_aware_nms(out_data, rows, cols,
-                             detector->cfg.score_thresh,
-                             detector->cfg.nms_iou_thresh,
-                             &raw, &raw_count);
-    if (rc != ONNX_OK) {
+    OnnxDet* dets = (OnnxDet*)malloc(sizeof(OnnxDet) * num_det);
+    if (!dets) {
         detector->api->ReleaseTensorTypeAndShapeInfo(oinfo);
         detector->api->ReleaseValue(output_tensor);
         detector->api->ReleaseValue(input_tensor);
-        free(resized);
-        free(input_buf);
-        return rc;
+        return ONNX_ERR_MEMORY;
     }
 
-    /* Normalize mı? */
-    int normalized = 0;
-    if (raw_count>0) {
-        float mx=0.f;
-        for (int i=0;i<raw_count;i++) {
-            if (raw[i].x1>mx) mx=raw[i].x1;
-            if (raw[i].y1>mx) mx=raw[i].y1;
-            if (raw[i].x2>mx) mx=raw[i].x2;
-            if (raw[i].y2>mx) mx=raw[i].y2;
-        }
-        normalized = (mx<=1.2f);
-    }
+    for (int i = 0; i < num_det; ++i) {
+        float x1 = out_data[i * elem_per_det + 0];
+        float y1 = out_data[i * elem_per_det + 1];
+        float x2 = out_data[i * elem_per_det + 2];
+        float y2 = out_data[i * elem_per_det + 3];
+        float score = out_data[i * elem_per_det + 4];
+        int cls = (int)out_data[i * elem_per_det + 5];
 
-    OnnxDet* dets = NULL;
-    if (raw_count>0) {
-        dets = (OnnxDet*)malloc(sizeof(OnnxDet)*raw_count);
-        if(!dets) {
-            free(raw);
-            detector->api->ReleaseTensorTypeAndShapeInfo(oinfo);
-            detector->api->ReleaseValue(output_tensor);
-            detector->api->ReleaseValue(input_tensor);
-            free(resized);
-            free(input_buf);
-            return ONNX_ERR_MEMORY;
-        }
-        for (int i=0;i<raw_count;i++) {
-            float x1=raw[i].x1, y1=raw[i].y1, x2=raw[i].x2, y2=raw[i].y2;
-            if (normalized) {
-                x1 *= (float)w; x2 *= (float)w;
-                y1 *= (float)h; y2 *= (float)h;
-            }
-            if (x1<0) x1=0; if (y1<0) y1=0;
-            if (x2>w-1) x2=(float)(w-1);
-            if (y2>h-1) y2=(float)(h-1);
-            dets[i].x1 = x1;
-            dets[i].y1 = y1;
-            dets[i].x2 = x2;
-            dets[i].y2 = y2;
-            dets[i].score = raw[i].score;
-            dets[i].cls = raw[i].cls;
-        }
+        dets[i].x1 = x1;
+        dets[i].y1 = y1;
+        dets[i].x2 = x2;
+        dets[i].y2 = y2;
+        dets[i].score = score;
+        dets[i].cls = cls;
     }
 
     *out_dets = dets;
-    *out_count = raw_count;
+    *out_count = num_det;
 
-    free(raw);
     detector->api->ReleaseTensorTypeAndShapeInfo(oinfo);
     detector->api->ReleaseValue(output_tensor);
     detector->api->ReleaseValue(input_tensor);
-    free(resized);
-    free(input_buf);
 
     return ONNX_OK;
 }
@@ -436,8 +244,6 @@ void onnx_free_detections(OnnxDet* dets) {
 }
 
 const char* onnx_runtime_version_string(void) {
-    /* Derleme zamanı API versiyonunu döndürüyoruz. Runtime kontrolü için
-       OrtGetApiBase()->GetVersion() eklenebilir (bazı sürümlerde mevcut). */
 #if defined(ORT_API_VERSION)
 #   if ORT_API_VERSION == 1
     return "ONNX Runtime API v1";

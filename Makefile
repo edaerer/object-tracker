@@ -1,14 +1,14 @@
 SRC_DIR   := src
 INC_DIR   := include
-BUILD_DIR := build
-BIN_DIR   := ./
-LIB_DIR   := lib
+BUILD_DIR := build/objects
+BIN_DIR   := .
+LIB_DIR   := libs
 
 CC := gcc
 
 CFLAGS  := -std=c99 -I$(INC_DIR) -w
 RPATH   := -Wl,-rpath,'$$ORIGIN/$(LIB_DIR)'
-LIBS    := -L$(LIB_DIR) -lGL -lglfw -lm -l:libonnxruntime.so.1 $(RPATH)
+LIBS    := -L$(LIB_DIR) -lGL -lglfw -ffast-math -lm -l:libonnxruntime.so.1 $(RPATH)
 
 SOURCES := $(wildcard $(SRC_DIR)/*.c)
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
