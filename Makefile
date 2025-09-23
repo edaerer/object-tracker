@@ -8,7 +8,7 @@ CC := gcc
 
 CFLAGS  := -std=c99 -I$(INC_DIR) -w
 RPATH   := -Wl,-rpath,'$$ORIGIN/$(LIB_DIR)'
-LIBS    := -L$(LIB_DIR) -lGL -lglfw -ffast-math -lm -l:libonnxruntime.so.1 $(RPATH)
+LIBS    := -L$(LIB_DIR) -lGL -lglfw -lm -l:libonnxruntime.so.1 $(RPATH)
 
 SOURCES := $(wildcard $(SRC_DIR)/*.c)
 OBJECTS := $(patsubst $(SRC_DIR)/%.c,$(BUILD_DIR)/%.o,$(SOURCES))
@@ -35,7 +35,7 @@ rebuild: clean all
 debug: CFLAGS += -O0 -g
 debug: rebuild
 
-release: CFLAGS += -O2 -DNDEBUG
+release: CFLAGS += -O3 -march=native -pipe -DNDEBUG
 release: rebuild
 
 -include $(DEPS)
